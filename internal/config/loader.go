@@ -10,6 +10,7 @@ import (
 	"hardener/internal/ui"
 
 	"github.com/adrg/frontmatter"
+	"gopkg.in/yaml.v3"
 )
 
 func contains(slice []string, val string) bool {
@@ -55,8 +56,18 @@ func LoadChecks(dir string, sys SystemInfo) ([]TestSuite, error) {
 
 		var fm FileFrontMatter
 		if _, err := frontmatter.Parse(bytes.NewReader(data), &fm); err != nil {
-			ui.Error(fmt.Errorf("metadata parsing error in %s: %w", f.Name(), err))
-			continue
+			return nil, fmt.Errorf("metadata parsing error in %s: %w", f.Name(), err)
+		}
+
+		// Re-decode YAML front matter with a strict decoder. The frontmatter
+		// library uses yaml.v2, which silently drops unknown keys; a misspelled
+		// check field would then turn the control into an invisible skip.
+		if raw, ok := yamlFrontMatter(data); ok {
+			dec := yaml.NewDecoder(bytes.NewReader(raw))
+			dec.KnownFields(true)
+			if err := dec.Decode(&fm); err != nil {
+				return nil, fmt.Errorf("metadata parsing error in %s: %w", f.Name(), err)
+			}
 		}
 
 		// --- Platform Validation Logic ---
@@ -80,5 +91,30 @@ func LoadChecks(dir string, sys SystemInfo) ([]TestSuite, error) {
 		}
 	}
 
+	if err := ValidateSuites(suites); err != nil {
+		return nil, err
+	}
+
 	return suites, nil
+}
+
+// yamlFrontMatter extracts the raw YAML block of a Markdown file. It mirrors
+// the delimiter detection of the frontmatter library ("---" or "---yaml")
+// and returns ok=false for files without a YAML header, which keep going
+// through the lenient parser unchanged.
+func yamlFrontMatter(data []byte) (block []byte, ok bool) {
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) < 2 {
+		return nil, false
+	}
+	first := strings.TrimSpace(string(lines[0]))
+	if first != "---" && first != "---yaml" {
+		return nil, false
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(string(lines[i])) == "---" {
+			return bytes.Join(lines[1:i], []byte("\n")), true
+		}
+	}
+	return nil, false
 }

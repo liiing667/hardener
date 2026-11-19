@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"hardener/internal/ui"
 	"os"
@@ -27,6 +28,32 @@ type rulesetDoc struct {
 	Labels []string `yaml:"labels"`
 	Suites []Check  `yaml:"checksuites"`
 	Checks []Check  `yaml:"checks"` // fallback key used by some entries in the wild
+}
+
+// strictRulesetDoc is the strict-decoding counterpart of rulesetDoc. The
+// pointers tell whether a list key was present at all, so LoadRuleset can
+// reject a document that defines both "checksuites" and "checks" instead of
+// silently dropping one of them.
+type strictRulesetDoc struct {
+	Title  string   `yaml:"title"`
+	OS     string   `yaml:"os"`
+	Arch   []string `yaml:"arch"`
+	Labels []string `yaml:"labels"`
+	Suites *[]Check `yaml:"checksuites"`
+	Checks *[]Check `yaml:"checks"`
+}
+
+// strictUnmarshal decodes a single YAML document while rejecting any field
+// that the target struct does not declare. A typo such as "securty_level"
+// otherwise parses without error and turns the affected control into a
+// permanent, silent skip, so unknown fields must stop the run up front.
+func strictUnmarshal(doc []byte, out interface{}) error {
+	dec := yaml.NewDecoder(bytes.NewReader(doc))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	return nil
 }
 
 // LoadRuleset parses a multi-document YAML file (documents separated by "---")
@@ -58,24 +85,33 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 			continue
 		}
 
-		var probe rulesetDoc
+		// The probe only classifies the document (header vs suite); the
+		// strict field whitelist is enforced when each document is decoded
+		// for real below, so an unknown key can never slip through here.
+		var probe struct {
+			Title         string        `yaml:"title"`
+			Preconditions preconditions `yaml:"preconditions"`
+		}
 		if err := yaml.Unmarshal([]byte(doc), &probe); err != nil {
 			return nil, fmt.Errorf("ruleset document %d: YAML parse error: %w", i+1, err)
 		}
 
 		if probe.Title == "" {
-			// Title-less first document → treat as guide header.
+			// A title-less first document is only valid as a guide header.
+			// If it carries suite content, strict header decoding rejects the
+			// suite-only keys and the file fails instead of dropping controls.
 			var hdr rulesetHeader
-			if err := yaml.Unmarshal([]byte(doc), &hdr); err != nil {
-				return nil, fmt.Errorf("ruleset header: YAML parse error: %w", err)
-			}
-			if len(hdr.Preconditions.Tools) > 0 {
-				ui.PrintInfo(fmt.Sprintf("Checking guide preconditions: %v", hdr.Preconditions.Tools))
-				if !CheckPreconditions(hdr.Preconditions.Tools) {
-					return nil, fmt.Errorf("ruleset %q cannot run: required tools are missing", path)
+			if err := strictUnmarshal([]byte(doc), &hdr); err == nil {
+				if len(hdr.Preconditions.Tools) > 0 {
+					ui.PrintInfo(fmt.Sprintf("Checking guide preconditions: %v", hdr.Preconditions.Tools))
+					if !CheckPreconditions(hdr.Preconditions.Tools) {
+						return nil, fmt.Errorf("ruleset %q cannot run: required tools are missing", path)
+					}
 				}
+				suiteStartIdx = i + 1
+			} else {
+				return nil, fmt.Errorf("ruleset document %d: suite document is missing a title: %w", i+1, err)
 			}
-			suiteStartIdx = i + 1
 		}
 		break
 	}
@@ -88,19 +124,28 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 			continue
 		}
 
-		var rd rulesetDoc
-		if err := yaml.Unmarshal([]byte(doc), &rd); err != nil {
+		docNum := suiteStartIdx + i + 1
+
+		// Strict decode: unknown keys fail the load rather than being dropped.
+		var sd strictRulesetDoc
+		if err := strictUnmarshal([]byte(doc), &sd); err != nil {
 			return nil, fmt.Errorf("ruleset document %d: YAML parse error: %w", suiteStartIdx+i+1, err)
 		}
 
-		if rd.Title == "" {
-			continue
+		// A document that defines both list keys is ambiguous: the loader can
+		// only honor one, so the other controls would silently vanish. Fail
+		// loudly instead of choosing a winner.
+		if sd.Suites != nil && sd.Checks != nil && len(*sd.Suites) > 0 && len(*sd.Checks) > 0 {
+			return nil, fmt.Errorf("ruleset document %d (%q): defines both \"checksuites\" (%d) and \"checks\" (%d); use only one list key per document",
+				docNum, sd.Title, len(*sd.Suites), len(*sd.Checks))
 		}
 
-		// Prefer "checksuites", fall back to "checks"
-		checks := rd.Suites
-		if len(checks) == 0 {
-			checks = rd.Checks
+		// Prefer "checksuites", fall back to the legacy "checks" key.
+		var checks []Check
+		if sd.Suites != nil && len(*sd.Suites) > 0 {
+			checks = *sd.Suites
+		} else if sd.Checks != nil {
+			checks = *sd.Checks
 		}
 
 		if len(checks) == 0 {
@@ -108,16 +153,20 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 		}
 
 		suites = append(suites, TestSuite{
-			Title:  rd.Title,
-			Labels: rd.Labels,
-			OS:     rd.OS,
-			Arch:   rd.Arch,
+			Title:  sd.Title,
+			Labels: sd.Labels,
+			OS:     sd.OS,
+			Arch:   sd.Arch,
 			Checks: checks,
 		})
 	}
 
 	if len(suites) == 0 {
 		return nil, fmt.Errorf("no valid suites found in ruleset file %q", path)
+	}
+
+	if err := ValidateSuites(suites); err != nil {
+		return nil, fmt.Errorf("ruleset %q: %w", path, err)
 	}
 
 	return suites, nil
