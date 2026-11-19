@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,7 +25,16 @@ type Options struct {
 	KeepSudoAlive bool
 }
 
-type Work func(observer executor.Observer, stop func() bool) error
+// Work runs the executor with the dashboard's observer and stop signal. It
+// returns the structured run status alongside any error so the renderer and
+// the caller share the same coverage/stop evidence.
+type Work func(observer executor.Observer, stop *executor.StopHandle) (executor.RunStatus, error)
+
+// Stop reasons recorded on the report; they stay user-readable in the UI.
+const (
+	reasonUserStop          = "user requested stop at the next check boundary"
+	reasonSudoRefreshFailed = "sudo credential refresh failed; stopping after the current check"
+)
 
 var ErrStopped = errors.New("run stopped by user; completed checks were retained")
 
@@ -41,8 +49,8 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 		return errors.New("dashboard requires an interactive terminal")
 	}
 	ready, exited, workerDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var stopping atomic.Bool
-	requestStop := func() { stopping.Store(true) }
+	var stopHandle executor.StopHandle
+	requestStop := func() { stopHandle.Request(reasonUserStop) }
 	m := newModel(options, suites, ready, requestStop)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFPS(20), tea.WithoutSignalHandler())
 
@@ -57,6 +65,7 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 	defer restore()
 
 	var workErr error
+	var runStatus executor.RunStatus
 	go func() {
 		defer close(workerDone)
 		select {
@@ -76,9 +85,9 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 					workErr = fmt.Errorf("execution panicked: %v", r)
 				}
 			}()
-			workErr = work(func(event executor.RunEvent) { p.Send(event) }, stopping.Load)
+			runStatus, workErr = work(func(event executor.RunEvent) { p.Send(event) }, &stopHandle)
 		}()
-		p.Send(finishedMsg{err: workErr, stopped: stopping.Load()})
+		p.Send(finishedMsg{err: workErr, status: runStatus, stopping: stopHandle.StopRequested()})
 	}()
 
 	interrupts := make(chan os.Signal, 1)
@@ -107,7 +116,7 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 				case <-ticker.C:
 					// Never prompt for credentials while the terminal is in raw mode.
 					if err := exec.Command("sudo", "-n", "-v").Run(); err != nil {
-						requestStop()
+						stopHandle.Request(reasonSudoRefreshFailed)
 						p.Send(ui.LogEntry{Level: "error", Message: "Sudo credential refresh failed; stopping after the current check."})
 						return
 					}
@@ -119,7 +128,7 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 	_, terminalErr := p.Run()
 	close(exited)
 	// Even a renderer error must not leave a background fix orphaned.
-	wasStopped := stopping.Load()
+	wasStopped := stopHandle.StopRequested()
 	requestStop()
 	<-workerDone
 	if terminalErr != nil {
@@ -128,7 +137,7 @@ func Run(options Options, suites []config.TestSuite, work Work) error {
 	if workErr != nil {
 		return workErr
 	}
-	if wasStopped {
+	if wasStopped && runStatus.Incomplete {
 		return ErrStopped
 	}
 	return nil

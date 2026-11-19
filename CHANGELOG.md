@@ -1,8 +1,25 @@
-   # Changelog
+# Changelog
 
-   ## Unreleased
+## Unreleased
 
-   Fix verification and rollback safety (issues #13 to #18):
+Stop evidence and report coverage (TUI/CI handoff):
+
+- A stop is no longer summarized by a single boolean. Every suite result now
+  carries `status` (`complete`/`partial`/`not_run`) with
+  `expected_checks`/`observed_checks`, including suites that never started,
+  so unexecuted checks and partial fix results cannot disappear from the
+  report.
+- Reports record `incomplete_reason` and a `stop_boundary` (suite index,
+  first unexecuted check index, suite title, reason), plus run-wide
+  `expected_checks`/`observed_checks` aggregates. The stop reason
+  distinguishes a user stop from a sudo credential refresh failure.
+- Stops remain boundary-based: the running check, fix, and rollback backup
+  always complete. A stop requested during the final check leaves observed
+  equal to expected, so that run is still reported as complete.
+- The saved-report viewer shows PARTIAL/NOT RUN categories, observed/planned
+  coverage, and explicit NOT RUN entries for each check past the boundary.
+
+Fix verification and rollback safety (issues #13 to #18):
 
    - Checks are re-run after each fix; only a passing re-check counts as
      fixed. Fixes that exit 0 but leave the check failing are reported as

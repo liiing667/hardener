@@ -16,12 +16,12 @@ func TestObserverStopsBetweenChecksAndPreservesPartialResults(t *testing.T) {
 	}}}
 	var events []RunEvent
 	stop := false
-	results, _, _, err := RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, func(e RunEvent) {
+	results, _, _, _, err := RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, func(e RunEvent) {
 		events = append(events, e)
 		if e.Kind == CheckFinished {
 			stop = true
 		}
-	}, func() bool { return stop })
+	}, BoolStop(func() bool { return stop }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,11 +45,11 @@ func TestObservedFixFinishesBackupBeforeStopping(t *testing.T) {
 		{ID: "later", Command: "printf 1", Expected: "1", SecurityLevel: "baseline"},
 	}}}
 	stop := false
-	results, _, _, err := RunSuitesObserved(ctx, ModeFix, "linux", "amd64", suites, func(e RunEvent) {
+	results, _, _, _, err := RunSuitesObserved(ctx, ModeFix, "linux", "amd64", suites, func(e RunEvent) {
 		if e.Kind == CheckFinished {
 			stop = true
 		}
-	}, func() bool { return stop })
+	}, BoolStop(func() bool { return stop }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestObservedErrorsAndManualChecksHaveStructuredStatus(t *testing.T) {
 		{ID: "error", Command: "exit 2", Expected: "1", SecurityLevel: "baseline"},
 		{ID: "manual", Command: "Manual action required: review firmware", SecurityLevel: "baseline"},
 	}}}
-	results, _, _, err := RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, nil, nil)
+	results, _, _, _, err := RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

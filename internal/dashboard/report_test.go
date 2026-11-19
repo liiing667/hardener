@@ -124,3 +124,86 @@ func TestOpenDoesNotInterruptActiveRun(t *testing.T) {
 		t.Fatal("open must wait until execution finishes")
 	}
 }
+
+// A stopped run must be reconstructable from the report alone: per-suite
+// expected/observed coverage, the not-run suite, explicit NOT RUN entries and
+// the incompleteness reason are all visible instead of collapsing to a flag.
+func TestSavedReportShowsCoverageBoundaryAndNotRunChecks(t *testing.T) {
+	saved := config.AuditReport{
+		ReportType:       "audit",
+		Incomplete:       true,
+		IncompleteReason: "user requested stop at the next check boundary",
+		ExpectedChecks:   5,
+		ObservedChecks:   1,
+		StopBoundary:     &config.StopBoundary{Reason: "user requested stop at the next check boundary", SuiteIndex: 0, CheckIndex: 1},
+		SuiteResults: []config.SuiteResult{
+			{
+				Title: "First", Status: config.SuitePartial, ExpectedChecks: 2, ObservedChecks: 1,
+				IncompleteReason: "user requested stop at the next check boundary",
+				Checks:           []config.CheckResult{{ID: "a1", Passed: true}},
+			},
+			{
+				Title: "Second", Status: config.SuiteNotRun, ExpectedChecks: 3, ObservedChecks: 0,
+				IncompleteReason: "user requested stop at the next check boundary",
+			},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "partial.json")
+	data, _ := json.Marshal(saved)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := testModel()
+	m.done, m.width, m.height = true, 120, 36
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	m = next.(model)
+	m.pathInput = path
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if !m.viewing || !m.incomplete || m.incompleteReason == "" {
+		t.Fatalf("incomplete evidence not imported: %+v", m)
+	}
+	view := m.View()
+	if !strings.Contains(view, "PARTIAL REPORT") || !strings.Contains(view, "1 / 5") {
+		t.Fatalf("header does not show run-wide coverage: %s", view)
+	}
+	if !strings.Contains(view, "NOT RUN") || !strings.Contains(view, "1/2 observed") {
+		t.Fatalf("suite states/coverage not shown: %s", view)
+	}
+	// The second suite never started; its three planned checks appear as
+	// explicit NOT RUN entries rather than vanishing.
+	m.selected = 1
+	logs := m.reportLogs()
+	if len(logs) != 3 {
+		t.Fatalf("not-run checks not enumerated: %d", len(logs))
+	}
+	for _, entry := range logs {
+		if entry.level != "stop" || !strings.Contains(entry.text, "NOT RUN") {
+			t.Fatalf("unexpected not-run entry: %+v", entry)
+		}
+	}
+	// The partial suite keeps its observed result and adds one NOT RUN entry
+	// for the check cut off at the stop boundary.
+	m.selected = 0
+	logs = m.reportLogs()
+	if len(logs) != 2 || logs[1].level != "stop" || !strings.Contains(logs[1].text, "NOT RUN") {
+		t.Fatalf("partial suite does not show the unexecuted check: %+v", logs)
+	}
+}
+
+// Legacy reports without the new fields keep rendering: coverage falls back to
+// the stored checks and complete suites are not mislabelled partial.
+func TestLegacyReportWithoutCoverageStillLoads(t *testing.T) {
+	saved := config.AuditReport{ReportType: "audit", SuiteResults: []config.SuiteResult{
+		{Title: "Old", Checks: []config.CheckResult{{ID: "x", Passed: true}, {ID: "y"}}},
+	}}
+	m := testModel()
+	m.width, m.height = 120, 36
+	m.setReport(saved, "legacy.json")
+	if m.incomplete || m.suites[0].status != config.SuiteComplete || m.suites[0].total != 2 {
+		t.Fatalf("legacy report misclassified: %+v", m.suites[0])
+	}
+	if len(m.reportLogs()) != 2 {
+		t.Fatal("legacy checks must remain browsable")
+	}
+}

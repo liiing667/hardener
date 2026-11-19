@@ -75,6 +75,16 @@ the current check, fix, and rollback backup are allowed to finish. Partial
 results are still reported, with `incomplete: true` in the report JSON. The completed/stopped dashboard remains available
 for review until closed. There is no in-UI force-kill shortcut.
 
+The report never reduces a stop to that boolean alone. Each suite carries
+`status` (`complete`, `partial`, `not_run`) plus `expected_checks` and
+`observed_checks`, so unexecuted checks stay visible even for suites that
+never started. At report level, `expected_checks`/`observed_checks`
+aggregate the coverage, `incomplete_reason` records why the run was cut
+(user stop or sudo refresh failure), and `stop_boundary` names the suite and
+the first check that did not run (`check_index: -1` means the stop landed
+between suites). A stop latched during the final check does not truncate
+anything: observed then equals expected and the run stays `complete`.
+
 ## Credentials and interactive commands
 
 When applicable checks need sudo, Hardener validates credentials before opening
@@ -133,8 +143,11 @@ recorded checks remain accessible, including reports exceeding the live feed's
 800-entry limit. Press o to open another report.
 
 Saved views display the original report timestamp and a READ ONLY label.
-Incomplete reports are marked PARTIAL. Planned totals and per-check timestamps
-are not stored in existing JSONs, so the viewer shows recorded check counts.
+Incomplete reports are marked PARTIAL with the reason and stop boundary in the
+activity feed. Each category shows its observed/planned coverage and a
+PARTIAL or NOT RUN state, and every planned check past the boundary is listed
+as an explicit NOT RUN entry. Per-check timestamps are not stored, so the
+viewer shows recorded check counts rather than replaying timing.
 This reconstructs results; it does not replay the original timed activity log.
 Older reports without structured error/manual fields retain their recorded
 pass/fail flags; the viewer does not guess missing status information.

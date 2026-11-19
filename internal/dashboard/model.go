@@ -22,6 +22,8 @@ type suiteState struct {
 	total   int
 	results map[int]config.CheckResult
 	done    bool
+	status  config.SuiteStatus
+	reason  string
 }
 
 type counts struct {
@@ -81,17 +83,20 @@ type logEntry struct{ at, level, text string }
 type readyMsg struct{}
 type tickMsg time.Time
 type finishedMsg struct {
-	err     error
-	stopped bool
+	err      error
+	status   executor.RunStatus
+	stopping bool
 }
 
 type model struct {
 	viewing, opening                      bool
 	pathInput, openError, source, savedAt string
 	incomplete                            bool
+	incompleteReason                      string
 	options                               Options
 	suites                                []suiteState
 	logs                                  []logEntry
+	expectedChecks, observedChecks        int
 	width, height                         int
 	active, selected, focus, logOffset    int
 	follow, done, stopping                bool
@@ -146,14 +151,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog(msg.Level, msg.Message)
 		}
 	case finishedMsg:
-		m.done, m.stopping, m.runErr, m.finished = true, msg.stopped, msg.err, time.Now()
+		m.done, m.stopping, m.runErr, m.finished = true, msg.stopping, msg.err, time.Now()
+		m.incomplete = msg.status.Incomplete
+		m.incompleteReason = msg.status.Reason
 		if msg.err != nil {
 			m.addLog("error", msg.err.Error())
 		}
-		if msg.stopped {
-			m.addLog("stop", "Stopped between checks. Completed results remain visible here.")
+		if msg.status.Incomplete {
+			m.addLog("stop", fmt.Sprintf("Run incomplete: %s. Recorded %d of %d planned checks; completed results remain visible here and in the report.",
+				msg.status.Reason, msg.status.ObservedChecks, msg.status.ExpectedChecks))
+			if msg.status.Boundary != nil {
+				m.addLog("stop", fmt.Sprintf("Stop boundary: suite %d, first unexecuted check %d.",
+					msg.status.Boundary.SuiteIndex, msg.status.Boundary.CheckIndex))
+			}
 		} else {
-			m.addLog("done", "Run finished. Review the results; press q to return to your shell.")
+			if msg.stopping {
+				m.addLog("done", "Stop requested during the final check; all planned checks completed, so this is a full run. Press q to return to your shell.")
+			} else {
+				m.addLog("done", "Run finished. Review the results; press q to return to your shell.")
+			}
 		}
 		if m.totals().fixed > 0 {
 			m.addLog("info", "Fixed checks passed a re-check but count as passes only in the next audit. Run an audit again to measure the new hardening level.")

@@ -30,8 +30,8 @@ func notify(observer Observer, event RunEvent) {
 	}
 }
 
-func stopRequested(stop func() bool) bool {
-	return stop != nil && stop()
+func stopRequested(stop StopSignal) bool {
+	return stop != nil && stop.StopRequested()
 }
 
 // FilterSuites applies the same label matching used by execution. The dashboard

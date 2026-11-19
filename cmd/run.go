@@ -220,17 +220,17 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 		ui.PrintInfo("No suites match the requested labels.")
 		return nil
 	}
-	work := func(observer executor.Observer, stop func() bool) error {
-		suiteResults, checksPassed, fixesApplied, runErr := executor.RunSuitesObserved(
+	work := func(observer executor.Observer, stop *executor.StopHandle) (executor.RunStatus, error) {
+		suiteResults, runStatus, checksPassed, fixesApplied, runErr := executor.RunSuitesObserved(
 			ctx, mode, sys.OS, sys.Arch, selectedSuites, observer, stop,
 		)
 		reportType := "audit"
 		if mode == executor.ModeFix {
 			reportType = "fix"
 		}
-		executor.MakeReportWithStatus(sys, suiteResults, reportType, stop != nil && stop())
+		executor.MakeReportFromStatus(sys, suiteResults, reportType, runStatus)
 		executor.MakeScorings(checksPassed, fixesApplied)
-		return runErr
+		return runStatus, runErr
 	}
 	useTUI, _ := cmd.Flags().GetBool("tui")
 	if useTUI && dashboard.Available() {
@@ -239,7 +239,8 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 	if useTUI {
 		ui.PrintInfo("Interactive terminal unavailable; using plain output.")
 	}
-	return work(nil, nil)
+	_, workErr := work(nil, nil)
+	return workErr
 
 }
 

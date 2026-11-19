@@ -35,7 +35,7 @@ func TestSummaryCountsErrorsFromStructuredStatus(t *testing.T) {
 	var fixes map[string]bool
 	logs := captureLog(t, func() {
 		var err error
-		_, passed, fixes, err = RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, nil, nil)
+		_, _, passed, fixes, err = RunSuitesObserved(ctx, ModeAudit, "linux", "amd64", suites, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestDryRunListsFixesWithoutRunningThem(t *testing.T) {
 		}}}
 		var results []config.SuiteResult
 		logs := captureLog(t, func() {
-			results, _, _, _ = RunSuitesObserved(ctx, mode, "linux", "amd64", suites, nil, nil)
+			results, _, _, _, _ = RunSuitesObserved(ctx, mode, "linux", "amd64", suites, nil, nil)
 		})
 		if _, err := os.Stat(marker); !os.IsNotExist(err) {
 			t.Fatalf("%s: dry run executed the fix", mode)

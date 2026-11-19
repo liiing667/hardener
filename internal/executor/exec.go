@@ -78,39 +78,77 @@ func HardenerCmdEnv() []string {
 func RunSuites(ctx *config.ExecContext, mode RunMode, osName, archName string, suites []config.TestSuite) (
 	[]config.SuiteResult, map[string]bool, map[string]bool, error) {
 
-	return RunSuitesObserved(ctx, mode, osName, archName, suites, nil, nil)
+	suiteResults, _, checksPassed, fixesApplied, err := RunSuitesObserved(ctx, mode, osName, archName, suites, nil, nil)
+	return suiteResults, checksPassed, fixesApplied, err
 }
 
 // RunSuitesObserved lets an optional UI observe results and request a stop
-// between checks. A running fix always gets to complete its rollback record.
+// between checks. A running fix always gets to complete its rollback record,
+// so a stop only takes effect at the next boundary. The returned RunStatus is
+// the structured evidence of how the run ended: per-suite expected/observed
+// coverage, the stop boundary and the reason coverage fell short. Consumers
+// must not re-derive completeness from the stop signal alone.
 func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName string,
-	suites []config.TestSuite, observer Observer, stop func() bool) (
-	[]config.SuiteResult, map[string]bool, map[string]bool, error) {
+	suites []config.TestSuite, observer Observer, stop StopSignal) (
+	[]config.SuiteResult, RunStatus, map[string]bool, map[string]bool, error) {
 
 	if len(suites) == 0 {
 		// All return statements must now include a nil error.
-		return nil, nil, nil, fmt.Errorf("error: No hardening guides (.md files with checks) found at the defined position: %s", ctx.BaseDir)
+		return nil, RunStatus{}, nil, nil, fmt.Errorf("error: No hardening guides (.md files with checks) found at the defined position: %s", ctx.BaseDir)
 	}
 
 	checksPassed := make(map[string]bool)
 	fixesApplied := make(map[string]bool)
 	var suiteResults []config.SuiteResult
+	status := RunStatus{}
 
+	// executedIndex counts only suites that pass the label filter, so the
+	// reported boundary and the dashboard's pre-filtered suite list line up.
+	executedIndex := -1
 	for suiteIndex, suite := range suites {
 		if !suiteMatchesLabels(suite, ctx.Labels) {
 			continue
 		}
-		if stopRequested(stop) {
-			break
+		executedIndex++
+		expected := len(suite.Checks)
+		status.ExpectedChecks += expected
+
+		// A stop observed between suites: this suite and every later one are
+		// recorded as not-run instead of being silently dropped, so the report
+		// still names every planned check.
+		if status.Incomplete || stopRequested(stop) {
+			if !status.Incomplete {
+				status.Incomplete = true
+				status.Reason = stopReason(stop)
+				status.Boundary = &Boundary{SuiteIndex: executedIndex, CheckIndex: -1, SuiteTitle: suite.Title}
+			}
+			suiteResults = append(suiteResults, notRunSuiteResult(suite, status.Reason))
+			continue
 		}
+
 		notify(observer, RunEvent{Kind: SuiteStarted, SuiteIndex: suiteIndex, Suite: suite})
 		msg := fmt.Sprintf("=== Running suite: %s ===",
 			suite.Title)
 		ui.PrintHeader(msg)
 
-		suiteResult := runSuite(ctx, mode, suite, ctx.SecurityLevel, suiteIndex, observer, stop)
+		suiteResult, observed := runSuite(ctx, mode, suite, ctx.SecurityLevel, suiteIndex, observer, stop)
+		status.ObservedChecks += observed
+		suiteResult.Title = suite.Title
+		suiteResult.ExpectedChecks = expected
+		suiteResult.ObservedChecks = observed
+		if observed == expected {
+			suiteResult.Status = config.SuiteComplete
+		} else {
+			// The stop cut the suite short after `observed` checks; the
+			// running check/fix itself was never interrupted.
+			status.Incomplete = true
+			status.Reason = stopReason(stop)
+			status.Boundary = &Boundary{SuiteIndex: executedIndex, CheckIndex: observed, SuiteTitle: suite.Title}
+			suiteResult.Status = config.SuitePartial
+			suiteResult.IncompleteReason = status.Reason
+		}
 		suiteResults = append(suiteResults, suiteResult)
-		if len(suiteResult.Checks) == len(suite.Checks) {
+		if observed == expected {
 			notify(observer, RunEvent{Kind: SuiteFinished, SuiteIndex: suiteIndex, Suite: suite})
 		}
 
@@ -128,10 +166,29 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 		}
 	}
 
-	return suiteResults, checksPassed, fixesApplied, nil
+	return suiteResults, status, checksPassed, fixesApplied, nil
 }
 
-func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, security_level string, suiteIndex int, observer Observer, stop func() bool) config.SuiteResult {
+// notRunSuiteResult keeps a planned-but-unstarted suite in the report with
+// explicit zero coverage, so a short audit cannot be mistaken for a full one.
+func notRunSuiteResult(suite config.TestSuite, reason string) config.SuiteResult {
+	return config.SuiteResult{
+		Title:            suite.Title,
+		Status:           config.SuiteNotRun,
+		ExpectedChecks:   len(suite.Checks),
+		ObservedChecks:   0,
+		IncompleteReason: reason,
+	}
+}
+
+func stopReason(stop StopSignal) string {
+	if stop == nil || stop.StopReason() == "" {
+		return DefaultStopReason
+	}
+	return stop.StopReason()
+}
+
+func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, security_level string, suiteIndex int, observer Observer, stop StopSignal) (config.SuiteResult, int) {
 	var checkResults []config.CheckResult
 
 	fixedCount, notEffectiveCount, skippedCount, distroSkippedCount, missingCount, passedCount, failedCount, errorCount, manualCount := 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -194,9 +251,8 @@ func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, sec
 	ui.PrintSummary(summary)
 
 	return config.SuiteResult{
-		Title:  suite.Title,
 		Checks: checkResults,
-	}
+	}, len(checkResults)
 }
 
 func suiteMatchesLabels(suite config.TestSuite, requested []string) bool {

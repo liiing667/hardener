@@ -24,7 +24,7 @@ func TestFixIsVerifiedByRerunningTheCheck(t *testing.T) {
 		// Fix command fails.
 		{ID: "failing", Command: "printf 0", Expected: "1", Fix: "exit 3", SecurityLevel: "baseline"},
 	}}}
-	results, _, fixes, err := RunSuitesObserved(ctx, ModeFix, "linux", "amd64", suites, nil, nil)
+	results, _, _, fixes, err := RunSuitesObserved(ctx, ModeFix, "linux", "amd64", suites, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

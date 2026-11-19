@@ -25,15 +25,15 @@ func init() {
 				suites = append(suites, suite)
 			}
 			return closeDashboard(dashboard.Run(dashboard.Options{Mode: "DEMO", System: "SIMULATED · no commands executed", SecurityLevel: "baseline"}, suites,
-				func(observer executor.Observer, stop func() bool) error {
+				func(observer executor.Observer, stop *executor.StopHandle) (executor.RunStatus, error) {
 					for si, suite := range suites {
-						if stop() {
+						if stop.StopRequested() {
 							break
 						}
 						observer(executor.RunEvent{Kind: executor.SuiteStarted, SuiteIndex: si, Suite: suite})
 						for ci, check := range suite.Checks {
-							if stop() {
-								return nil
+							if stop.StopRequested() {
+								return executor.RunStatus{Incomplete: true, Reason: stop.StopReason()}, nil
 							}
 							observer(executor.RunEvent{Kind: executor.CheckStarted, SuiteIndex: si, CheckIndex: ci, Check: check})
 							time.Sleep(220 * time.Millisecond)
@@ -60,7 +60,7 @@ func init() {
 						}
 						observer(executor.RunEvent{Kind: executor.SuiteFinished, SuiteIndex: si, Suite: suite})
 					}
-					return nil
+					return executor.RunStatus{}, nil
 				}))
 		},
 	})

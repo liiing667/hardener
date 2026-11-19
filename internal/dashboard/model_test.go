@@ -63,7 +63,10 @@ func TestQuitWaitsForWorkerCompletion(t *testing.T) {
 		t.Fatal("q must request a boundary stop, not quit a running fix")
 	}
 	m = next.(model)
-	next, _ = m.Update(finishedMsg{stopped: true})
+	next, _ = m.Update(finishedMsg{
+		status:   executor.RunStatus{Incomplete: true, Reason: "test stop", ExpectedChecks: 5, ObservedChecks: 1},
+		stopping: true,
+	})
 	_, cmd = next.(model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd == nil {
 		t.Fatal("completed dashboard should allow quit")

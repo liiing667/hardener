@@ -83,6 +83,7 @@ func loadSavedReport(path string) (config.AuditReport, error) {
 func (m *model) setReport(saved config.AuditReport, path string) {
 	m.viewing, m.done, m.opening, m.follow = true, true, false, false
 	m.stopping, m.incomplete, m.runErr = false, saved.Incomplete, nil
+	m.incompleteReason = saved.IncompleteReason
 	m.source, m.selected, m.active, m.focus = path, 0, -1, 0
 	m.options = Options{Mode: saved.ReportType, System: saved.OS + " / " + saved.Arch + " · " + saved.Distro}
 	m.savedAt = "timestamp not recorded"
@@ -90,14 +91,56 @@ func (m *model) setReport(saved config.AuditReport, path string) {
 		m.savedAt = saved.Timestamp.Format(time.RFC3339)
 	}
 	m.suites, m.logs = nil, nil
+	m.expectedChecks, m.observedChecks = 0, 0
 	for _, s := range saved.SuiteResults {
-		state := suiteState{title: cleanText(s.Title), total: len(s.Checks), results: make(map[int]config.CheckResult), done: true}
+		expected := s.ExpectedChecks
+		if expected == 0 {
+			// Legacy reports predate per-suite coverage; their checks slice
+			// was the whole plan and every stored check ran.
+			expected = len(s.Checks)
+		}
+		state := suiteState{
+			title: cleanText(s.Title), total: expected, results: make(map[int]config.CheckResult),
+			done: true, status: suiteStatus(s, expected), reason: s.IncompleteReason,
+		}
 		for i, r := range s.Checks {
 			state.results[i] = r
 		}
 		m.suites = append(m.suites, state)
+		m.expectedChecks += expected
+		m.observedChecks += s.ObservedChecks
+	}
+	if saved.ExpectedChecks != 0 {
+		m.expectedChecks = saved.ExpectedChecks
+	}
+	if saved.ObservedChecks != 0 {
+		m.observedChecks = saved.ObservedChecks
+	}
+	if saved.Incomplete && saved.IncompleteReason != "" {
+		m.addLog("stop", "Saved report is incomplete: "+cleanText(saved.IncompleteReason))
+		if saved.StopBoundary != nil {
+			m.addLog("stop", fmt.Sprintf("Recorded stop boundary: suite %d, first unexecuted check %d.",
+				saved.StopBoundary.SuiteIndex, saved.StopBoundary.CheckIndex))
+		}
 	}
 	m.logOffset = m.reportTopOffset()
+}
+
+// suiteStatus normalizes the stored status, including legacy reports that
+// have no status field. Coverage alone distinguishes the three states.
+func suiteStatus(s config.SuiteResult, expected int) config.SuiteStatus {
+	switch s.Status {
+	case config.SuiteComplete, config.SuitePartial, config.SuiteNotRun:
+		return s.Status
+	}
+	switch {
+	case len(s.Checks) == 0:
+		return config.SuiteNotRun
+	case len(s.Checks) >= expected:
+		return config.SuiteComplete
+	default:
+		return config.SuitePartial
+	}
 }
 
 // Saved results are not constrained by the live log ring buffer. Category
@@ -109,7 +152,18 @@ func (m model) reportLogs() []logEntry {
 	s := m.suites[m.selected]
 	entries := make([]logEntry, 0, len(s.results))
 	for i := 0; i < s.total; i++ {
-		r := s.results[i]
+		r, exists := s.results[i]
+		if !exists {
+			// Planned checks past the stop boundary never ran. Surface them
+			// explicitly instead of silently dropping them from the viewer.
+			reason := s.reason
+			if reason == "" {
+				reason = "run stopped before this check executed"
+			}
+			entries = append(entries, logEntry{"        ", "stop",
+				cleanText(fmt.Sprintf("NOT RUN · check %d of %d never executed (%s)", i+1, s.total, reason))})
+			continue
+		}
 		level, text := resultMessage(r)
 		if r.Description != "" {
 			text += "\n" + r.Description

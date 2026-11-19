@@ -124,17 +124,67 @@ type CheckResult struct {
 type SuiteResult struct {
 	Title  string        `json:"title"`
 	Checks []CheckResult `json:"checks"`
+	// Status says how the suite ended. It is independent of the pass/fail
+	// outcome of the checks themselves.
+	Status SuiteStatus `json:"status"`
+	// ExpectedChecks is the number of checks the ruleset planned for this
+	// suite before execution started; ObservedChecks is how many produced a
+	// result. A short audit is visible whenever observed < expected, even
+	// without the top-level boolean.
+	ExpectedChecks int `json:"expected_checks"`
+	ObservedChecks int `json:"observed_checks"`
+	// IncompleteReason explains why observed < expected; empty for a
+	// complete suite. For not-run/partial suites it names the stop reason.
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+}
+
+// SuiteStatus describes the coverage of a suite, not its findings.
+type SuiteStatus string
+
+const (
+	// SuiteComplete means every planned check produced a result.
+	SuiteComplete SuiteStatus = "complete"
+	// SuitePartial means some checks ran and the rest were cut off by a stop.
+	SuitePartial SuiteStatus = "partial"
+	// SuiteNotRun means the suite never started because a stop came first.
+	SuiteNotRun SuiteStatus = "not_run"
+)
+
+// StopBoundary records exactly where a requested stop cut execution short.
+// It is only present when observed coverage is below the planned coverage.
+type StopBoundary struct {
+	// Reason is why the stop was requested (user action, sudo refresh
+	// failure, ...); defaults to a generic explanation when the stop signal
+	// does not provide one.
+	Reason string `json:"reason"`
+	// SuiteIndex/CheckIndex are the positions in the executed (label
+	// filtered) suite list where execution stopped. CheckIndex is the first
+	// check that did not run; a stop between suites sets CheckIndex to -1.
+	SuiteIndex int `json:"suite_index"`
+	CheckIndex int `json:"check_index"`
+	// SuiteTitle is the title of the suite at SuiteIndex when one exists.
+	SuiteTitle string `json:"suite_title,omitempty"`
 }
 
 // Full audit report
 type AuditReport struct {
-	Incomplete   bool          `json:"incomplete,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	OS           string        `json:"os"`
-	Arch         string        `json:"arch"`
-	Distro       string        `json:"distro"`
-	SuiteResults []SuiteResult `json:"suite_results"`
-	ReportType   string        `json:"report_type"`
+	Incomplete bool `json:"incomplete,omitempty"`
+	// IncompleteReason names the cause of an incomplete run; empty on a
+	// normal completion. It duplicates the per-suite reasons at run scope so
+	// a consumer reading only the header can tell why coverage is short.
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+	// StopBoundary is present only when a stop cut the run short.
+	StopBoundary *StopBoundary `json:"stop_boundary,omitempty"`
+	// ExpectedChecks/ObservedChecks aggregate the per-suite coverage, so the
+	// truncation is provable from the report without trusting the boolean.
+	ExpectedChecks int           `json:"expected_checks"`
+	ObservedChecks int           `json:"observed_checks"`
+	Timestamp      time.Time     `json:"timestamp"`
+	OS             string        `json:"os"`
+	Arch           string        `json:"arch"`
+	Distro         string        `json:"distro"`
+	SuiteResults   []SuiteResult `json:"suite_results"`
+	ReportType     string        `json:"report_type"`
 }
 
 type SystemInfo struct {

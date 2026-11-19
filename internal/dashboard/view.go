@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"hardener/internal/config"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -135,7 +137,8 @@ func (m model) View() string {
 	score := panel(paint("VERIFIED HARDENING", muted)+"\n"+bold(percentage(c.percent()), scoreColor(c.percent()))+paint(fmt.Sprintf("  %d/%d assessed", c.passed, c.assessed()), muted), w1, 4, line)
 	progress := panel(paint("RUN PROGRESS", muted)+"\n"+bold(fmt.Sprintf("%d / %d", c.complete, c.total), ink)+paint(" checks", muted), w2, 4, line)
 	if m.viewing {
-		progress = panel(paint("RECORDED CHECKS", muted)+"\n"+bold(fmt.Sprint(c.complete), ink)+paint(" · planned total not recorded", muted), w2, 4, line)
+		progress = panel(paint("RECORDED CHECKS", muted)+"\n"+
+			bold(fmt.Sprintf("%d / %d", m.observedChecks, m.expectedChecks), ink)+paint(" observed / planned", muted), w2, 4, line)
 	}
 	findings := panel(paint("FINDINGS / FIX COMMANDS", muted)+"\n"+paint(fmt.Sprintf("%d fail · %d error", c.failed, c.errors), red)+paint(fmt.Sprintf(" · %d fixed · %d not effective", c.fixed, c.unverified), amber), w3, 4, line)
 	metrics := lipgloss.JoinHorizontal(lipgloss.Top, score, " ", progress, " ", findings)
@@ -192,14 +195,21 @@ func (m model) categoryView(width, height int) string {
 			}
 		}
 		if m.viewing {
-			state = "RECORDED"
+			switch suite.status {
+			case config.SuiteNotRun:
+				state = "NOT RUN"
+			case config.SuitePartial:
+				state = "PARTIAL"
+			default:
+				state = "RECORDED"
+			}
 		}
 		title := pair(bold(fmt.Sprintf("%02d ", i+1), muted)+bold(suite.title, ink), paint(" "+state, muted), width-4)
 		pct := c.percent()
 		gauge := bold(percentage(pct), scoreColor(pct)) + " " + bar(pct, max(4, width-20), scoreColor(pct)) + paint(" verified", muted)
 		counts := fmt.Sprintf("%d/%d run · %d pass · %d fail", c.complete, c.total, c.passed, c.failed)
 		if m.viewing {
-			counts = fmt.Sprintf("%d recorded · %d pass · %d fail", c.complete, c.passed, c.failed)
+			counts = fmt.Sprintf("%d/%d observed · %d pass · %d fail", c.complete, c.total, c.passed, c.failed)
 		}
 		if c.errors > 0 {
 			counts += fmt.Sprintf(" · %d err", c.errors)
