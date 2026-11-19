@@ -33,6 +33,13 @@
      selects every check. `high` still excludes them. Levels are
      case-insensitive, an unknown `--security-level` is rejected instead of
      silently running baseline, and checks with an unknown level are listed
+   - Ruleset YAML document boundaries now follow the YAML grammar instead of
+     scanning for `---` lines, so a `---` inside a heredoc or any block scalar
+     stays part of its command/fix instead of splitting the stream and hiding
+     later suites. Unknown or duplicate top-level keys and documents that
+     cannot be parsed (e.g. an unterminated block scalar or a `---` used as
+     indented content) fail the load; multi-document rulesets, heredoc
+     markers and the `checks` list alias keep working
    - `fix --dry-run` was ignored and applied every fix; it now audits and
      lists the fixes it would apply. `--arch`, which never had an effect, is
      deprecated

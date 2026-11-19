@@ -1,11 +1,10 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
 	"hardener/internal/ui"
+	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -33,6 +32,14 @@ type rulesetDoc struct {
 // and returns one TestSuite per document.  It intentionally skips OS / arch
 // filtering so the caller (executeRun) can decide whether to apply it.
 //
+// Document boundaries are determined by the YAML grammar, not by scanning for
+// "---" lines. A "---" inside a block scalar (e.g. a heredoc in a command or
+// fix that writes another YAML file) is ordinary content; only a directive
+// document marker at column zero starts a new document. Unknown or duplicate
+// top-level keys, and documents that cannot be parsed (including block scalars
+// that never close), fail the load instead of silently splitting or hiding a
+// suite.
+//
 // The optional first document may be a header-only block (no title, no
 // checksuites) that declares guide-level preconditions:
 //
@@ -48,25 +55,23 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 		return nil, fmt.Errorf("cannot read ruleset file %q: %w", path, err)
 	}
 
-	docs := splitYAMLDocuments(data)
+	docs, err := parseRulesetDocuments(data)
+	if err != nil {
+		return nil, fmt.Errorf("ruleset file %q: %w", path, err)
+	}
 
 	// Check whether the first non-empty document is a header (no title).
 	suiteStartIdx := 0
 	for i, doc := range docs {
-		doc = strings.TrimSpace(doc)
-		if doc == "" {
-			continue
-		}
-
 		var probe rulesetDoc
-		if err := yaml.Unmarshal([]byte(doc), &probe); err != nil {
+		if err := doc.Decode(&probe); err != nil {
 			return nil, fmt.Errorf("ruleset document %d: YAML parse error: %w", i+1, err)
 		}
 
 		if probe.Title == "" {
 			// Title-less first document → treat as guide header.
 			var hdr rulesetHeader
-			if err := yaml.Unmarshal([]byte(doc), &hdr); err != nil {
+			if err := doc.Decode(&hdr); err != nil {
 				return nil, fmt.Errorf("ruleset header: YAML parse error: %w", err)
 			}
 			if len(hdr.Preconditions.Tools) > 0 {
@@ -83,13 +88,8 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 	var suites []TestSuite
 
 	for i, doc := range docs[suiteStartIdx:] {
-		doc = strings.TrimSpace(doc)
-		if doc == "" {
-			continue
-		}
-
 		var rd rulesetDoc
-		if err := yaml.Unmarshal([]byte(doc), &rd); err != nil {
+		if err := doc.Decode(&rd); err != nil {
 			return nil, fmt.Errorf("ruleset document %d: YAML parse error: %w", suiteStartIdx+i+1, err)
 		}
 
@@ -123,79 +123,107 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 	return suites, nil
 }
 
-// splitYAMLDocuments splits a multi-document YAML byte slice on "---" lines.
-// It preserves each document as a raw string for individual unmarshalling.
+// allowedTopLevelKeys are the only keys accepted at the root of a ruleset
+// document. Both "checksuites" and "checks" name the check list; the header
+// document may additionally carry "preconditions".
+var allowedTopLevelKeys = map[string]bool{
+	"title":         true,
+	"os":            true,
+	"arch":          true,
+	"labels":        true,
+	"checksuites":   true,
+	"checks":        true,
+	"preconditions": true,
+}
+
+// parseRulesetDocuments splits a ruleset stream into its YAML documents using
+// the YAML grammar itself (yaml.v3's multi-document decoder). A "---" line is
+// a boundary only where the grammar treats it as a directive document marker,
+// so "---" lines inside block scalars such as heredocs stay part of the
+// enclosing document.
 //
-// A "---" line separates documents at any indentation, as it always has here,
-// so rulesets with indented separators keep loading. The exception is the
-// content of a block scalar (command: |, fix: >-, ...): a fix that writes a
-// YAML file from a heredoc can contain a "---" line of its own.
-func splitYAMLDocuments(data []byte) []string {
-	var docs []string
-	var current strings.Builder
-	blockIndent := -1 // column of the key whose block scalar is open, or -1
+// Every non-empty document must be a top-level mapping with only known, unique
+// keys: an unknown key (which older loaders ignored) or a duplicated key
+// (which silently overwrote earlier values) fails the load, as do documents
+// the parser cannot close, e.g. an unterminated block scalar.
+func parseRulesetDocuments(data []byte) ([]*yaml.Node, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if blockIndent >= 0 && (trimmed == "" || leadingSpace(line) > blockIndent) {
-			current.WriteString(line)
-			current.WriteByte('\n')
-			continue
-		}
-		blockIndent = -1
-		if isDocumentMarker(trimmed) {
-			if s := strings.TrimSpace(current.String()); s != "" {
-				docs = append(docs, s)
+	var docs []*yaml.Node
+	docNum := 0
+	for {
+		var node yaml.Node
+		if err := decoder.Decode(&node); err != nil {
+			if err == io.EOF {
+				break
 			}
-			current.Reset()
+			return nil, fmt.Errorf("ruleset document %d: %w", docNum+1, err)
+		}
+		docNum++
+
+		root := documentRoot(&node)
+		if root == nil {
+			// Explicit empty document ("---" followed by another marker).
 			continue
 		}
-		current.WriteString(line)
-		current.WriteByte('\n')
-		if blockScalarStart.MatchString(line) {
-			blockIndent = keyColumn(line)
+		if root.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("ruleset document %d: expected a top-level mapping, got %s", docNum, yamlKindName(root.Kind))
 		}
-	}
-	// flush the last document
-	if s := strings.TrimSpace(current.String()); s != "" {
-		docs = append(docs, s)
-	}
-	return docs
-}
-
-// blockScalarStart matches a line whose value is a block scalar indicator,
-// such as "  command: |", "fix: >-" or "- |2".
-var blockScalarStart = regexp.MustCompile(`(?:^|[:-])\s+[|>][-+0-9]*\s*(?:#.*)?$`)
-
-// isDocumentMarker matches a trimmed "---" line, optionally with a comment.
-func isDocumentMarker(trimmed string) bool {
-	rest, ok := strings.CutPrefix(trimmed, "---")
-	if !ok {
-		return false
-	}
-	rest = strings.TrimSpace(rest)
-	return rest == "" || strings.HasPrefix(rest, "#")
-}
-
-func leadingSpace(line string) int {
-	return len(line) - len(strings.TrimLeft(line, " \t"))
-}
-
-// keyColumn is the column of the first key on a line, after any "- " of a
-// sequence entry. Block scalar content is indented further than that.
-func keyColumn(line string) int {
-	i := 0
-	for i < len(line) {
-		switch {
-		case line[i] == ' ' || line[i] == '\t':
-			i++
-		case line[i] == '-' && i+1 < len(line) && (line[i+1] == ' ' || line[i+1] == '\t'):
-			i += 2
-		default:
-			return i
+		if err := validateTopLevelKeys(root, docNum); err != nil {
+			return nil, err
 		}
+		docs = append(docs, root)
 	}
-	return i
+	return docs, nil
+}
+
+// documentRoot unwraps the DocumentNode that the decoder emits and reports nil
+// for an empty (null-only) document.
+func documentRoot(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.DocumentNode {
+		if len(node.Content) == 0 {
+			return nil
+		}
+		node = node.Content[0]
+	}
+	if node.Tag == "!!null" && node.Value == "" && len(node.Content) == 0 {
+		return nil
+	}
+	return node
+}
+
+// validateTopLevelKeys rejects unknown keys and duplicate keys at the document
+// root. The check is limited to the top level so nested check mappings keep
+// their own validation.
+func validateTopLevelKeys(root *yaml.Node, docNum int) error {
+	seen := make(map[string]bool, len(root.Content)/2)
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		name := key.Value
+		if !allowedTopLevelKeys[name] {
+			return fmt.Errorf("ruleset document %d: unknown top-level key %q (line %d)", docNum, name, key.Line)
+		}
+		if seen[name] {
+			return fmt.Errorf("ruleset document %d: duplicate top-level key %q (line %d)", docNum, name, key.Line)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func yamlKindName(kind yaml.Kind) string {
+	switch kind {
+	case yaml.DocumentNode:
+		return "document"
+	case yaml.SequenceNode:
+		return "sequence"
+	case yaml.MappingNode:
+		return "mapping"
+	case yaml.ScalarNode:
+		return "scalar"
+	case yaml.AliasNode:
+		return "alias"
+	default:
+		return "node"
+	}
 }

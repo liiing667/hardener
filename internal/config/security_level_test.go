@@ -3,8 +3,6 @@ package config
 import (
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestDetermineSecurityFit(t *testing.T) {
@@ -68,23 +66,6 @@ func TestIsCheckApplicable(t *testing.T) {
 	} {
 		if ok, reason := IsCheckApplicable(tc.check, intel); ok != tc.want {
 			t.Errorf("%s: got %v (%s), want %v", tc.name, ok, reason, tc.want)
-		}
-	}
-}
-
-// A "---" inside a block scalar is content, e.g. in a fix that writes a YAML
-// file. Elsewhere "---" still separates documents at any indentation, as it
-// always has, so rulesets with indented separators keep loading.
-func TestSplitYAMLDocuments(t *testing.T) {
-	data := "title: A\nchecksuites:\n- id: a\n  fix: |\n    cat > /etc/x.yaml <<EOF\n    ---\n    key: v\n    EOF\n  expected: 1\n--- # next suite\ntitle: B\nchecksuites:\n- command: >-\n    printf x\n  ---\ntitle: C\n---\r\ntitle: D\n"
-	docs := splitYAMLDocuments([]byte(data))
-	if len(docs) != 4 || !strings.Contains(docs[0], "    ---\n    key: v") || !strings.HasPrefix(docs[2], "title: C") {
-		t.Fatalf("got %d documents: %q", len(docs), docs)
-	}
-	for _, doc := range docs {
-		var probe rulesetDoc
-		if err := yaml.Unmarshal([]byte(doc), &probe); err != nil {
-			t.Fatalf("document does not parse: %v\n%s", err, doc)
 		}
 	}
 }
