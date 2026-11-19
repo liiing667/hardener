@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"hardener/internal/config"
 	"hardener/internal/dashboard"
@@ -174,8 +175,9 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 	}
 
 	if len(suites) == 0 {
-		ui.PrintInfo("No compatible hardening checks found for your system.")
-		return nil
+		// Nothing to verify must not exit successfully: automation would
+		// read it as a clean scan.
+		return ui.ReturnError("No checks", fmt.Errorf("no compatible hardening checks found for your system; the scan verifies nothing"))
 	}
 	// These checks never ran in earlier versions either; say so once.
 	if unknown := config.UnknownSecurityLevels(suites); len(unknown) > 0 {
@@ -217,8 +219,7 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 	// Share the exact selection between the dashboard and the execution engine.
 	selectedSuites = executor.FilterSuites(selectedSuites, ctx.Labels)
 	if len(selectedSuites) == 0 {
-		ui.PrintInfo("No suites match the requested labels.")
-		return nil
+		return ui.ReturnError("No checks", fmt.Errorf("no suites match the requested labels; the scan verifies nothing"))
 	}
 	work := func(observer executor.Observer, stop func() bool) error {
 		suiteResults, checksPassed, fixesApplied, runErr := executor.RunSuitesObserved(
@@ -227,6 +228,14 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 		reportType := "audit"
 		if mode == executor.ModeFix {
 			reportType = "fix"
+		}
+		if errors.Is(runErr, executor.ErrNoChecksExecuted) {
+			// Not a single check ran: record an explicitly incomplete
+			// report and a non-success exit instead of a normal report
+			// with a meaningless 0% score.
+			executor.MakeReportIncomplete(sys, suiteResults, reportType, executor.IncompleteReasonNoChecksExecuted)
+			ui.PrintFinalInfo("No checks were executed; this scan verifies nothing and is marked incomplete.")
+			return runErr
 		}
 		executor.MakeReportWithStatus(sys, suiteResults, reportType, stop != nil && stop())
 		executor.MakeScorings(checksPassed, fixesApplied)

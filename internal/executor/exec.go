@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"hardener/internal/config"
 	"hardener/internal/ui"
@@ -11,6 +12,13 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ErrNoChecksExecuted is returned when a run finished without executing a
+// single check: every check was skipped (security level, distro, missing
+// prerequisite) or no suite matched the selection. The resulting report
+// verifies nothing, so callers must mark it incomplete and fail the run
+// instead of letting automation read it as a normal 0%-score scan.
+var ErrNoChecksExecuted = errors.New("no checks were executed: every check was skipped, so this scan verifies nothing")
 
 // hardenerSbinDirs are the sbin locations we prepend to PATH. Distros like
 // openSUSE do not include /usr/sbin in the login PATH for regular users, which
@@ -95,6 +103,7 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 	checksPassed := make(map[string]bool)
 	fixesApplied := make(map[string]bool)
 	var suiteResults []config.SuiteResult
+	executed := 0
 
 	for suiteIndex, suite := range suites {
 		if !suiteMatchesLabels(suite, ctx.Labels) {
@@ -115,6 +124,12 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 		}
 
 		for _, check := range suiteResult.Checks {
+			// A check that was not skipped actually ran (or, for a manual
+			// audit point, was delivered to the user); everything else
+			// verified nothing.
+			if !check.Skipped && !check.SkippedDistro && !check.SkippedMissing {
+				executed++
+			}
 			// Manual checks pass without verifying anything, so they stay out
 			// of the pass rate, as they do on the dashboard.
 			if check.Skipped || check.SkippedDistro || check.SkippedMissing || check.Manual {
@@ -126,6 +141,12 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 				fixesApplied[check.ID] = check.FixVerified
 			}
 		}
+	}
+
+	// A run that executed nothing must not look like a normal run. A stop
+	// requested before the first check is already reported as incomplete.
+	if executed == 0 && !stopRequested(stop) {
+		return suiteResults, checksPassed, fixesApplied, ErrNoChecksExecuted
 	}
 
 	return suiteResults, checksPassed, fixesApplied, nil

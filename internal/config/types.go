@@ -128,13 +128,17 @@ type SuiteResult struct {
 
 // Full audit report
 type AuditReport struct {
-	Incomplete   bool          `json:"incomplete,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	OS           string        `json:"os"`
-	Arch         string        `json:"arch"`
-	Distro       string        `json:"distro"`
-	SuiteResults []SuiteResult `json:"suite_results"`
-	ReportType   string        `json:"report_type"`
+	Incomplete bool `json:"incomplete,omitempty"`
+	// IncompleteReason says why the report does not describe a complete,
+	// verifiable run (e.g. "stopped", "no_checks_executed"). Empty means a
+	// normal, complete run.
+	IncompleteReason string        `json:"incomplete_reason,omitempty"`
+	Timestamp        time.Time     `json:"timestamp"`
+	OS               string        `json:"os"`
+	Arch             string        `json:"arch"`
+	Distro           string        `json:"distro"`
+	SuiteResults     []SuiteResult `json:"suite_results"`
+	ReportType       string        `json:"report_type"`
 }
 
 type SystemInfo struct {
