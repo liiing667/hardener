@@ -1,0 +1,15 @@
+title: Contradictory sudo/fix override (Linux profile fixture)
+os: linux
+labels:
+- auth
+checksuites:
+- id: lock-root-contradictory
+  description: The rhel override sets fix_sudo but no fix exists anywhere.
+  command: passwd -S root | grep -c ' L '
+  expected: 1
+  sudo: true
+  security_level: baseline
+  distro:
+    rhel:
+      command: passwd -S root | grep -c ' L '
+      fix_sudo: true

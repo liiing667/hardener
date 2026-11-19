@@ -1,0 +1,12 @@
+title: Empty distro map (Linux profile fixture)
+os: linux
+labels:
+- ssh
+checksuites:
+- id: sshd-active-empty-map
+  description: A distro map with no entries matches nothing.
+  command: systemctl is-active ssh | grep -c active
+  expected: 1
+  sudo: false
+  security_level: baseline
+  distro: {}

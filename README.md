@@ -277,6 +277,15 @@ Family chains are derived from `ID` + `ID_LIKE` in `/etc/os-release`, with a sma
 
 If a check has a `distro:` map but no key in the chain matches, the check is skipped with a `skipped_distro` state — it does not count as a failure.
 
+**Load-time validation.** Because a key that never matches would silently remove its check from the score, the ruleset fails to load when a `distro:` map contains:
+
+- an *unknown/unreachable key* — not a known distro ID or family (nor `<target>-<profile>`), e.g. a typo like `debain`;
+- a *profile key without a generic fallback* — e.g. `debian-server` without `debian`, which would distro-skip the check on every Debian run without `--profile server`;
+- a *contradictory sudo/fix* — `fix_sudo` (or `sudo`) set where neither the override nor the base check defines a `fix` (or `command`);
+- an *empty distro map* (`distro: {}`).
+
+The neutral runtime skip is unaffected: a check whose map simply does not list the current distro is still reported as `skipped_distro`, never as a failure.
+
 ### Profiles (`--profile`)
 
 For role-based differences (server vs. client), pass a profile at runtime:

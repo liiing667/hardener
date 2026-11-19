@@ -120,6 +120,13 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 		return nil, fmt.Errorf("no valid suites found in ruleset file %q", path)
 	}
 
+	// A distro override that can never match (typo'd key, profile key
+	// without a generic fallback, contradictory sudo/fix) would silently
+	// distro-skip its check out of the score. Fail the load instead.
+	if err := ValidateSuitesDistroOverrides(suites); err != nil {
+		return nil, fmt.Errorf("ruleset %q: %w", path, err)
+	}
+
 	return suites, nil
 }
 

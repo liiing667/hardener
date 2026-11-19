@@ -80,5 +80,11 @@ func LoadChecks(dir string, sys SystemInfo) ([]TestSuite, error) {
 		}
 	}
 
+	// Same load-time distro-override validation as LoadRuleset: an
+	// unreachable override must not silently distro-skip its check.
+	if err := ValidateSuitesDistroOverrides(suites); err != nil {
+		return nil, fmt.Errorf("guides in %q: %w", dir, err)
+	}
+
 	return suites, nil
 }

@@ -1,0 +1,49 @@
+title: SSH (Linux profile fixture)
+os: linux
+labels:
+- ssh
+checksuites:
+- id: sshd-active
+  description: Legal distro-family-profile fallback chain.
+  command: systemctl is-active ssh | grep -c active
+  expected: 1
+  sudo: false
+  fix: systemctl enable --now ssh
+  fix_sudo: true
+  security_level: baseline
+  distro:
+    debian-server:
+      command: systemctl is-active ssh | grep -c active
+    debian:
+      command: systemctl is-active ssh | grep -c active
+    ubuntu:
+      command: systemctl is-active ssh | grep -c active
+    rhel:
+      command: systemctl is-active sshd | grep -c active
+    rocky:
+      command: systemctl is-active sshd | grep -c active
+    suse:
+      command: systemctl is-active sshd | grep -c active
+    arch:
+      command: systemctl is-active sshd | grep -c active
+
+---
+
+title: Empty-password lock (Linux profile fixture)
+os: linux
+labels:
+- auth
+checksuites:
+- id: no-empty-passwords
+  description: Family-only keys, no profile.
+  command: grep -c nullok /etc/pam.d/common-auth
+  expected: 0
+  sudo: false
+  security_level: baseline
+  distro:
+    debian:
+      command: grep -c nullok /etc/pam.d/common-auth
+    rhel:
+      command: grep -c nullok /etc/pam.d/system-auth
+    fedora:
+      command: grep -c nullok /etc/pam.d/system-auth

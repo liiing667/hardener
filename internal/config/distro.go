@@ -80,24 +80,68 @@ func normalizeOSReleaseValue(v string) string {
 	return strings.ToLower(v)
 }
 
-// knownFamily maps a distro ID to its canonical family chain, used when
+// distroFamilyMap maps a distro ID to its canonical family chain, used when
 // /etc/os-release is missing ID_LIKE (some minimal Arch/openSUSE images).
+var distroFamilyMap = map[string][]string{
+	"ubuntu":     {"debian"},
+	"kali":       {"debian"},
+	"linuxmint":  {"debian"},
+	"mint":       {"debian"},
+	"pop":        {"debian"},
+	"elementary": {"debian"},
+	"zorin":      {"debian"},
+
+	"rocky":     {"rhel", "fedora"},
+	"almalinux": {"rhel", "fedora"},
+	"ol":        {"rhel", "fedora"},
+	"oracle":    {"rhel", "fedora"},
+	"centos":    {"rhel", "fedora"},
+	"rhel":      {"fedora"},
+	"redhat":    {"fedora"},
+	"fedora":    {"rhel"},
+
+	"opensuse":            {"suse"},
+	"opensuse-leap":       {"suse"},
+	"opensuse-tumbleweed": {"suse"},
+	"sles":                {"suse"},
+	"sled":                {"suse"},
+
+	"manjaro":     {"arch"},
+	"endeavouros": {"arch"},
+	"artix":       {"arch"},
+	"garuda":      {"arch"},
+}
+
 func knownFamily(id string) []string {
-	switch id {
-	case "ubuntu", "kali", "linuxmint", "mint", "pop", "elementary", "zorin":
-		return []string{"debian"}
-	case "rocky", "almalinux", "ol", "oracle", "centos":
-		return []string{"rhel", "fedora"}
-	case "rhel", "redhat":
-		return []string{"fedora"}
-	case "fedora":
-		return []string{"rhel"}
-	case "opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles", "sled":
-		return []string{"suse"}
-	case "manjaro", "endeavouros", "artix", "garuda":
-		return []string{"arch"}
+	return distroFamilyMap[id]
+}
+
+// extraDistroTargets are distro-map keys that can genuinely match at runtime
+// but are neither family names nor IDs with a distroFamilyMap entry: bare
+// distro IDs that are their own family, common aliases, and the "linux"
+// fallback DetectDistro returns when /etc/os-release is unreadable.
+var extraDistroTargets = []string{
+	"debian", "arch", "suse", // real IDs that double as family names
+	"archlinux", // alias used for Arch (Vagrant boxes, some os-release forks)
+	"linux",     // fallback when /etc/os-release is missing or unparseable
+}
+
+// knownDistroTargets returns every target a distro-map key can legitimately
+// start with: all known distro IDs and family names. A key outside this set
+// can never match DetectDistroFamily's chain, so it would silently
+// distro-skip its check on every system.
+func knownDistroTargets() map[string]bool {
+	targets := make(map[string]bool, len(distroFamilyMap)+len(extraDistroTargets))
+	for id, families := range distroFamilyMap {
+		targets[id] = true
+		for _, fam := range families {
+			targets[fam] = true
+		}
 	}
-	return nil
+	for _, t := range extraDistroTargets {
+		targets[t] = true
+	}
+	return targets
 }
 
 func appendUnique(list []string, v string) []string {
