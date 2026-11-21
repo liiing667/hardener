@@ -148,14 +148,24 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 	var (
 		suites []config.TestSuite
 		sys    config.SystemInfo
+		snap   config.RulesetSnapshot
 		err    error
 	)
 
 	if rulesetPath != "" {
 		// ── Ruleset mode ──────────────────────────────────────────────────────
-		suites, sys, err = setupAndValidateRuleset(ctx, rulesetPath)
+		snap, sys, err = setupAndValidateRuleset(ctx, rulesetPath)
 		if err != nil {
 			return ui.ReturnError("Ruleset loading failed", err)
+		}
+		// LoadRuleset intentionally returns every suite regardless of its
+		// declared os/arch scope (see its doc comment); this is the filtering
+		// step it defers to the caller. Without it, every checksuite in a
+		// ruleset.yaml runs on every machine, e.g. Intel-only checks executing
+		// (and always failing) on Apple Silicon and vice versa.
+		suites = config.FilterSuitesByPlatform(snap.FrozenSuites(), sys)
+		if len(suites) == 0 {
+			return ui.ReturnError("Ruleset loading failed", fmt.Errorf("no suites in ruleset %q are applicable to this system (%s/%s)", rulesetPath, sys.OS, sys.Arch))
 		}
 	} else {
 		// ── Markdown / guide-directory mode ───────────────────────────────────
@@ -167,11 +177,21 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 		}
 
 		ui.PrintInfo(fmt.Sprintf("Starting to collect Suites from %s", mdPath))
-		suites, err = config.LoadChecks(mdPath, sys)
+		snap, err = config.LoadGuideSnapshot(mdPath, sys)
 		if err != nil {
 			return ui.ReturnError("Failed to load checks", err)
 		}
+		suites = snap.FrozenSuites()
 	}
+
+	// The run admits exactly one ruleset snapshot: its source, content
+	// version, and check set are frozen from here on. A ruleset edited,
+	// reloaded, or retried after a failure cannot change what this run
+	// executes or reports.
+	ctx.RulesetSource = snap.Source
+	ctx.RulesetVersion = snap.Version
+	ui.PrintInfo(fmt.Sprintf("Admitted ruleset %s (version %s): %d suite(s), %d check(s) frozen for this run",
+		snap.Source, snap.ShortVersion(), len(snap.Suites), snap.ChecksTotal()))
 
 	if len(suites) == 0 {
 		ui.PrintInfo("No compatible hardening checks found for your system.")
@@ -228,7 +248,7 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 		if mode == executor.ModeFix {
 			reportType = "fix"
 		}
-		executor.MakeReportWithStatus(sys, suiteResults, reportType, stop != nil && stop())
+		executor.MakeReportWithRuleset(sys, snap, suiteResults, reportType, stop != nil && stop())
 		executor.MakeScorings(checksPassed, fixesApplied)
 		return runErr
 	}
@@ -243,9 +263,9 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 
 }
 
-// setupAndValidateRuleset loads suites from a ruleset.yaml and derives a
-// SystemInfo from the current runtime, no 00_README.md is required.
-func setupAndValidateRuleset(ctx *config.ExecContext, rulesetPath string) ([]config.TestSuite, config.SystemInfo, error) {
+// setupAndValidateRuleset loads a ruleset.yaml into a frozen snapshot and
+// derives a SystemInfo from the current runtime, no 00_README.md is required.
+func setupAndValidateRuleset(ctx *config.ExecContext, rulesetPath string) (config.RulesetSnapshot, config.SystemInfo, error) {
 	sys := config.SystemInfo{
 		OS:     runtime.GOOS,
 		Arch:   runtime.GOARCH,
@@ -254,24 +274,27 @@ func setupAndValidateRuleset(ctx *config.ExecContext, rulesetPath string) ([]con
 
 	ui.PrintInfo(fmt.Sprintf("Loading ruleset from %s", rulesetPath))
 
-	suites, err := config.LoadRuleset(rulesetPath)
+	snap, err := config.LoadRulesetSnapshot(rulesetPath)
 	if err != nil {
-		return nil, sys, err
+		return config.RulesetSnapshot{}, sys, err
 	}
 
-	ui.PrintInfo(fmt.Sprintf("Loaded %d suite(s) from ruleset", len(suites)))
+	ui.PrintInfo(fmt.Sprintf("Loaded %d suite(s) from ruleset", len(snap.Suites)))
 
-	// LoadRuleset intentionally returns every suite regardless of its
-	// declared os/arch scope (see its doc comment); this is the filtering
-	// step it defers to the caller. Without it, every checksuite in a
-	// ruleset.yaml runs on every machine, e.g. Intel-only checks executing
-	// (and always failing) on Apple Silicon and vice versa.
-	suites = config.FilterSuitesByPlatform(suites, sys)
-	if len(suites) == 0 {
-		return nil, sys, fmt.Errorf("no suites in ruleset %q are applicable to this system (%s/%s)", rulesetPath, sys.OS, sys.Arch)
+	return snap, sys, nil
+}
+
+// rulesetLabel renders the admitted ruleset snapshot for the dashboard
+// header, e.g. "ruleset.yaml@0123456789ab". Empty when no ruleset was loaded.
+func rulesetLabel(ctx *config.ExecContext) string {
+	if ctx.RulesetVersion == "" {
+		return ""
 	}
-
-	return suites, sys, nil
+	version := ctx.RulesetVersion
+	if len(version) > 12 {
+		version = version[:12]
+	}
+	return filepath.Base(ctx.RulesetSource) + "@" + version
 }
 
 func compareTarget(path string, sys config.SystemInfo) bool {

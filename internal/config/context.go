@@ -13,7 +13,12 @@ type ExecContext struct {
 	Profile      string
 	Labels       []string
 	Timestamp    string
-	Extra        map[string]interface{}
+	// RulesetSource and RulesetVersion identify the ruleset snapshot
+	// admitted for this run: where it was loaded from and its content hash.
+	// Both stay empty when no ruleset was loaded (e.g. a rollback run).
+	RulesetSource  string
+	RulesetVersion string
+	Extra          map[string]interface{}
 	// DryRun lists the fix each failing check would get instead of running it.
 	DryRun bool
 }

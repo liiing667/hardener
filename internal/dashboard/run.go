@@ -23,6 +23,10 @@ type Options struct {
 	Mode          string
 	System        string
 	SecurityLevel string
+	// Ruleset labels the admitted ruleset snapshot ("name@version") so the
+	// header shows which ruleset version the running checks belong to.
+	// Empty for demos and reports saved before admission froze the ruleset.
+	Ruleset      string
 	KeepSudoAlive bool
 }
 

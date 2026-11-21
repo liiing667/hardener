@@ -47,7 +47,19 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read ruleset file %q: %w", path, err)
 	}
+	return parseRuleset(data, path)
+}
 
+// ParseRuleset is the parsing half of LoadRuleset for content already in
+// memory. LoadRulesetSnapshot hashes exactly these bytes for its version, so
+// the hash always describes the content the suites were parsed from.
+func ParseRuleset(data []byte) ([]TestSuite, error) {
+	return parseRuleset(data, "")
+}
+
+// parseRuleset implements LoadRuleset. source names the ruleset in error
+// messages and may be empty for in-memory content.
+func parseRuleset(data []byte, source string) ([]TestSuite, error) {
 	docs := splitYAMLDocuments(data)
 
 	// Check whether the first non-empty document is a header (no title).
@@ -72,7 +84,7 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 			if len(hdr.Preconditions.Tools) > 0 {
 				ui.PrintInfo(fmt.Sprintf("Checking guide preconditions: %v", hdr.Preconditions.Tools))
 				if !CheckPreconditions(hdr.Preconditions.Tools) {
-					return nil, fmt.Errorf("ruleset %q cannot run: required tools are missing", path)
+					return nil, fmt.Errorf("ruleset %s cannot run: required tools are missing", rulesetName(source))
 				}
 			}
 			suiteStartIdx = i + 1
@@ -117,10 +129,19 @@ func LoadRuleset(path string) ([]TestSuite, error) {
 	}
 
 	if len(suites) == 0 {
-		return nil, fmt.Errorf("no valid suites found in ruleset file %q", path)
+		return nil, fmt.Errorf("no valid suites found in ruleset file %s", rulesetName(source))
 	}
 
 	return suites, nil
+}
+
+// rulesetName renders a ruleset source for error messages. In-memory
+// content has no path to quote.
+func rulesetName(source string) string {
+	if source == "" {
+		return "<memory>"
+	}
+	return fmt.Sprintf("%q", source)
 }
 
 // splitYAMLDocuments splits a multi-document YAML byte slice on "---" lines.

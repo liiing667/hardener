@@ -228,6 +228,16 @@ See [TUI.md](TUI.md) for keyboard controls, scoring, and terminal requirements.
 
 ## Ruleset Features
 
+### Frozen ruleset admission
+
+A run admits exactly one ruleset snapshot: the source path, a content
+version (SHA-256 of the parsed bytes), and the check set are frozen when the
+run starts, and the executor, dashboard, and saved report all use that set.
+Loading is all-or-nothing — a ruleset or guide file that fails to read or
+parse fails the whole load instead of silently running half the checks. The
+saved report records the ruleset's source and version, so results from
+before and after a ruleset update (or a restart) can never be confused.
+
 ### Security levels
 
 Every check has a `security_level` field: `baseline`, `medium`, `high`, or `optional`, in that order. Only checks at or below the level requested via `--security-level` are executed; the rest are reported as `skipped`. Default is `baseline`.

@@ -85,6 +85,16 @@ func (m *model) setReport(saved config.AuditReport, path string) {
 	m.stopping, m.incomplete, m.runErr = false, saved.Incomplete, nil
 	m.source, m.selected, m.active, m.focus = path, 0, -1, 0
 	m.options = Options{Mode: saved.ReportType, System: saved.OS + " / " + saved.Arch + " · " + saved.Distro}
+	if saved.RulesetVersion != "" {
+		version := saved.RulesetVersion
+		if len(version) > 12 {
+			version = version[:12]
+		}
+		m.options.Ruleset = version
+		if saved.RulesetSource != "" {
+			m.options.Ruleset = filepath.Base(saved.RulesetSource) + "@" + version
+		}
+	}
 	m.savedAt = "timestamp not recorded"
 	if !saved.Timestamp.IsZero() {
 		m.savedAt = saved.Timestamp.Format(time.RFC3339)

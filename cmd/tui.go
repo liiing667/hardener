@@ -69,6 +69,7 @@ func runDashboard(ctx *config.ExecContext, mode executor.RunMode, suites []confi
 	return closeDashboard(dashboard.Run(dashboard.Options{
 		Mode: string(mode), System: ctx.OSName + " / " + ctx.ArchName + " · " + ctx.DistroName,
 		SecurityLevel: ctx.SecurityLevel, KeepSudoAlive: keepAlive,
+		Ruleset: rulesetLabel(ctx),
 	}, suites, work))
 }
 

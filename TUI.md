@@ -34,6 +34,9 @@ requires an interactive terminal.
   fix messages, backup errors, and report messages.
 - Top: verified pass percentage, completed/total checks, findings, and successful
   fix commands. Elapsed time and current run state remain visible.
+- The header also names the admitted ruleset snapshot (`name@version`), so the
+  checks on screen are attributable to one frozen ruleset version; saved
+  reports show the version recorded when the run admitted its ruleset.
 - Wide terminals (at least 96 columns) use two columns. Narrow terminals show
   one browsable category above the feed. Minimum useful size: 64 × 24.
 - Colors adapt to dark/light terminal backgrounds. Scores below 35% are red,

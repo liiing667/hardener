@@ -14,14 +14,23 @@ func MakeReport(sys config.SystemInfo, suiteResults []config.SuiteResult, report
 
 // MakeReportWithStatus explicitly marks reports from a stopped run as incomplete.
 func MakeReportWithStatus(sys config.SystemInfo, suiteResults []config.SuiteResult, reportType string, incomplete bool) {
+	MakeReportWithRuleset(sys, config.RulesetSnapshot{}, suiteResults, reportType, incomplete)
+}
+
+// MakeReportWithRuleset additionally records which ruleset snapshot the run
+// admitted (its source and content version), so a saved report cannot be
+// mistaken for the output of a different ruleset version after a restart.
+func MakeReportWithRuleset(sys config.SystemInfo, snap config.RulesetSnapshot, suiteResults []config.SuiteResult, reportType string, incomplete bool) {
 	auditReport := config.AuditReport{
-		Incomplete:   incomplete,
-		Timestamp:    time.Now(),
-		OS:           sys.OS,
-		Arch:         sys.Arch,
-		Distro:       sys.Distro,
-		SuiteResults: suiteResults,
-		ReportType:   reportType,
+		Incomplete:     incomplete,
+		Timestamp:      time.Now(),
+		OS:             sys.OS,
+		Arch:           sys.Arch,
+		Distro:         sys.Distro,
+		SuiteResults:   suiteResults,
+		ReportType:     reportType,
+		RulesetSource:  snap.Source,
+		RulesetVersion: snap.Version,
 	}
 	// Report the file Save wrote. The message used to name the binary's
 	// directory, while reports go to the working directory.

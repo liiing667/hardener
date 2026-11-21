@@ -135,6 +135,12 @@ type AuditReport struct {
 	Distro       string        `json:"distro"`
 	SuiteResults []SuiteResult `json:"suite_results"`
 	ReportType   string        `json:"report_type"`
+	// RulesetSource and RulesetVersion identify the ruleset snapshot the run
+	// admitted (its load path and content hash), so a saved report cannot be
+	// mistaken for the output of a different ruleset version after a
+	// restart. Empty in reports written before admission froze the ruleset.
+	RulesetSource  string `json:"ruleset_source,omitempty"`
+	RulesetVersion string `json:"ruleset_version,omitempty"`
 }
 
 type SystemInfo struct {

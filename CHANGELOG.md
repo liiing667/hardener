@@ -2,6 +2,22 @@
 
    ## Unreleased
 
+   Ruleset admission and loading safety:
+
+   - A run admits one frozen ruleset snapshot — its source, content version
+     (SHA-256 of the parsed bytes), and check set — and the executor,
+     dashboard, and report all use exactly that set. The saved report
+     records the ruleset's source and version, and the dashboard header
+     shows them, so results can never be mistaken for the output of a
+     different ruleset version after a reload or restart
+   - Ruleset and guide loading is all-or-nothing: a guide file that fails
+     to read or parse now fails the whole load instead of silently running
+     half the checks, which made unchecked hosts look compliant
+   - Hot reloads swap the admitted snapshot atomically; a failed reload
+     keeps the last complete version instead of mixing old and new rules
+   - Single-suite rulesets, the legacy `checks` list key, header
+     preconditions, and distro overrides load unchanged
+
    Fix verification and rollback safety (issues #13 to #18):
 
    - Checks are re-run after each fix; only a passing re-check counts as

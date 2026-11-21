@@ -126,9 +126,17 @@ func (m model) View() string {
 	}
 	elapsed := end.Sub(m.started).Round(time.Second)
 	header := pair(bold("HARDENER", ink)+paint("  /  "+strings.ToUpper(m.options.Mode), blue), bold(status, statusInk), m.width)
-	meta := pair(paint(cleanText(m.options.System)+"  ·  "+cleanText(m.options.SecurityLevel), muted), paint(elapsed.String(), muted), m.width)
+	metaLeft := cleanText(m.options.System) + "  ·  " + cleanText(m.options.SecurityLevel)
+	if m.options.Ruleset != "" {
+		metaLeft += "  ·  " + cleanText(m.options.Ruleset)
+	}
+	meta := pair(paint(metaLeft, muted), paint(elapsed.String(), muted), m.width)
 	if m.viewing {
-		meta = fit(paint(cleanText(m.options.System)+" · "+m.savedAt+" · "+cleanText(m.source), muted), m.width)
+		savedMeta := cleanText(m.options.System) + " · " + m.savedAt + " · " + cleanText(m.source)
+		if m.options.Ruleset != "" {
+			savedMeta += " · " + cleanText(m.options.Ruleset)
+		}
+		meta = fit(paint(savedMeta, muted), m.width)
 	}
 	w1, w2 := (m.width-2)/3, (m.width-2)/3
 	w3 := m.width - w1 - w2 - 2
