@@ -8,6 +8,9 @@ type RunEvent struct {
 	Kind       EventKind
 	SuiteIndex int
 	CheckIndex int
+	// Generation binds live dashboard events to the same admission snapshot
+	// as the results and score. Older observers can ignore it.
+	Generation string
 	Suite      config.TestSuite
 	Check      config.Check
 	Result     config.CheckResult

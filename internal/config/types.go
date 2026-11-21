@@ -107,6 +107,10 @@ type CheckResult struct {
 	SkipReason  string `json:"skip_reason,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Manual      bool   `json:"manual,omitempty"`
+	// Generation and FitSource bind this result to the host snapshot that
+	// admitted it. They are optional for old readers and old reports.
+	Generation string `json:"generation,omitempty"`
+	FitSource  string `json:"fit_source,omitempty"`
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	Passed      bool   `json:"passed"`
@@ -122,19 +126,39 @@ type CheckResult struct {
 
 // Suite result
 type SuiteResult struct {
-	Title  string        `json:"title"`
-	Checks []CheckResult `json:"checks"`
+	Title              string        `json:"title"`
+	Checks             []CheckResult `json:"checks"`
+	Generation         string        `json:"generation,omitempty"`
+	GenerationSource   string        `json:"generation_source,omitempty"`
+	CheckSetHash       string        `json:"check_set_hash,omitempty"`
+	HostHash           string        `json:"host_hash,omitempty"`
+	ExpectedChecks     int           `json:"expected_checks,omitempty"`
+	ObservedChecks     int           `json:"observed_checks,omitempty"`
+	UnexecutedChecks   []string      `json:"unexecuted_checks,omitempty"`
+	Incomplete         bool          `json:"incomplete,omitempty"`
+	IncompleteReason   string        `json:"incomplete_reason,omitempty"`
 }
 
 // Full audit report
 type AuditReport struct {
-	Incomplete   bool          `json:"incomplete,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	OS           string        `json:"os"`
-	Arch         string        `json:"arch"`
-	Distro       string        `json:"distro"`
-	SuiteResults []SuiteResult `json:"suite_results"`
-	ReportType   string        `json:"report_type"`
+	Incomplete       bool          `json:"incomplete,omitempty"`
+	IncompleteReason string        `json:"incomplete_reason,omitempty"`
+	// Generation, RunGeneration and HostGeneration are equivalent aliases for
+	// the same admitted host snapshot. Keeping the aliases makes the evidence
+	// readable to older consumers without changing existing fields.
+	Generation       string        `json:"generation,omitempty"`
+	RunGeneration    string        `json:"run_generation,omitempty"`
+	HostGeneration   string        `json:"host_generation,omitempty"`
+	GenerationSource string        `json:"generation_source,omitempty"`
+	FitSource        string        `json:"fit_source,omitempty"`
+	CheckSetHash     string        `json:"check_set_hash,omitempty"`
+	HostHash         string        `json:"host_hash,omitempty"`
+	Timestamp        time.Time     `json:"timestamp"`
+	OS               string        `json:"os"`
+	Arch             string        `json:"arch"`
+	Distro           string        `json:"distro"`
+	SuiteResults     []SuiteResult `json:"suite_results"`
+	ReportType       string        `json:"report_type"`
 }
 
 type SystemInfo struct {

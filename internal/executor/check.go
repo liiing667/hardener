@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"hardener/internal/config"
 	"hardener/internal/ui"
-	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -13,80 +11,34 @@ import (
 // with the distro overrides that were applied, so callers report the command
 // and expected value that actually ran.
 func runCheck(ctx *config.ExecContext, mode RunMode, check config.Check, security_level string) (config.CheckResult, config.Check) {
-	if !config.DetermineSecurityFit(security_level, check.SecurityLevel) {
-		reason := fmt.Sprintf("requires security level %q; selected level is %q", check.SecurityLevel, security_level)
-		if !config.IsSecurityLevel(check.SecurityLevel) {
-			reason = fmt.Sprintf("unknown security level %q (known: %s)", check.SecurityLevel, strings.Join(config.SecurityLevels, ", "))
-		}
-		return config.CheckResult{
+	generation := ctx.EnsureGeneration(config.TestSuite{Checks: []config.Check{check}})
+	generation.ObserveCheck(check)
+	return runAdmittedCheck(ctx, mode, generation.Admit(check, security_level))
+}
+
+// runAdmittedCheck executes a check whose applicability, distro/profile
+// overrides and prerequisite probes were all frozen at run admission.
+func runAdmittedCheck(ctx *config.ExecContext, mode RunMode, decision config.AdmissionDecision) (config.CheckResult, config.Check) {
+	check := decision.Check
+	if decision.Unexecuted() {
+		result := config.CheckResult{
 			ID:          check.ID,
 			Description: check.Description,
-			Output:      reason,
-			SkipReason:  reason,
-			Skipped:     true,
-		}, check
-	}
-
-	sys := config.SystemInfo{OS: ctx.OSName, Arch: ctx.ArchName}
-	if ok, reason := config.IsCheckApplicable(check, sys); !ok {
-		return config.CheckResult{
-			ID:            check.ID,
-			Description:   check.Description,
-			Output:        reason,
-			SkipReason:    reason,
-			SkippedDistro: true,
-		}, check
-	}
-
-	// Build the distro lookup chain: [DistroName, ...DistroFamily].
-	// DistroFamily already starts with the ID when populated by run.go,
-	// but we defensively include DistroName first in case a caller has only
-	// set DistroName without family detection.
-	chain := ctx.DistroFamily
-	if len(chain) == 0 || (len(chain) > 0 && chain[0] != ctx.DistroName) {
-		chain = append([]string{ctx.DistroName}, chain...)
-	}
-
-	resolved, supported := check.ResolveForDistro(chain, ctx.Profile)
-	if !supported {
-		return config.CheckResult{
-			ID:            check.ID,
-			Description:   check.Description,
-			Output:        fmt.Sprintf("not supported on distro %q", ctx.DistroName),
-			SkipReason:    fmt.Sprintf("not supported on distro %q", ctx.DistroName),
-			SkippedDistro: true,
-		}, check
-	}
-	check = resolved
-
-	if check.RequiresCommand != "" {
-		probe := exec.Command("sh", "-c", "command -v "+check.RequiresCommand+" >/dev/null 2>&1")
-		probe.Env = HardenerCmdEnv()
-		if err := probe.Run(); err != nil {
-			ui.PrintSkippedMissing(check.ID, check.RequiresCommand)
-			return config.CheckResult{
-				ID:             check.ID,
-				Description:    check.Description,
-				Output:         fmt.Sprintf("required command %q not found", check.RequiresCommand),
-				SkipReason:     fmt.Sprintf("required command %q not found", check.RequiresCommand),
-				SkippedMissing: true,
-			}, check
+			Output:      decision.SkipReason,
+			SkipReason:  decision.SkipReason,
+			Generation:  decision.Generation,
+			FitSource:   decision.Source,
 		}
-	}
-
-	if check.RequiresFile != "" {
-		// Only skip on true "not found" — a permission error means the file
-		// probably exists but the audit process can't stat it without sudo.
-		if _, err := os.Lstat(check.RequiresFile); err != nil && os.IsNotExist(err) {
-			ui.PrintSkippedMissing(check.ID, check.RequiresFile)
-			return config.CheckResult{
-				ID:             check.ID,
-				Description:    check.Description,
-				Output:         fmt.Sprintf("required file %q not present", check.RequiresFile),
-				SkipReason:     fmt.Sprintf("required file %q not present", check.RequiresFile),
-				SkippedMissing: true,
-			}, check
+		switch {
+		case decision.SkippedMissing:
+			result.SkippedMissing = true
+			ui.PrintSkippedMissing(check.ID, admittedMissingPrerequisite(check, decision.SkipReason))
+		case decision.SkippedDistro:
+			result.SkippedDistro = true
+		default:
+			result.Skipped = true
 		}
+		return result, check
 	}
 
 	passed, output, err := RunCheck(check)
@@ -113,6 +65,8 @@ func runCheck(ctx *config.ExecContext, mode RunMode, check config.Check, securit
 		Passed:      passed,
 		Output:      output,
 		Manual:      isManualAction(check.Command),
+		Generation:  decision.Generation,
+		FitSource:   decision.Source,
 	}
 	if err != nil {
 		result.Error = err.Error()
@@ -138,6 +92,18 @@ func runCheck(ctx *config.ExecContext, mode RunMode, check config.Check, securit
 	}
 
 	return result, check
+}
+
+// admittedMissingPrerequisite keeps the established "Skipped missing: <name>" log
+// line while the structured reason stays in the result.
+func admittedMissingPrerequisite(check config.Check, reason string) string {
+	if check.RequiresCommand != "" {
+		return check.RequiresCommand
+	}
+	if check.RequiresFile != "" {
+		return check.RequiresFile
+	}
+	return reason
 }
 
 // printPlannedFix reports what fix mode would do for a failing check, without

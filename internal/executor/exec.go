@@ -89,32 +89,41 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 
 	if len(suites) == 0 {
 		// All return statements must now include a nil error.
+		// A failed attempt must not leave a previous run's accepted identity
+		// visible as if it belonged to this attempt.
+		ctx.BeginGeneration()
 		return nil, nil, nil, fmt.Errorf("error: No hardening guides (.md files with checks) found at the defined position: %s", ctx.BaseDir)
 	}
 
+	// Freeze the admitted check set and every host precondition before the
+	// first command runs. A retry calls this function again and therefore gets
+	// a new generation instead of adding checks to the previous score.
+	plan := newRunPlan(ctx, suites, ctx.SecurityLevel)
 	checksPassed := make(map[string]bool)
 	fixesApplied := make(map[string]bool)
 	var suiteResults []config.SuiteResult
 
-	for suiteIndex, suite := range suites {
-		if !suiteMatchesLabels(suite, ctx.Labels) {
-			continue
-		}
+	for _, planned := range plan.Suites {
 		if stopRequested(stop) {
 			break
 		}
-		notify(observer, RunEvent{Kind: SuiteStarted, SuiteIndex: suiteIndex, Suite: suite})
+		notify(observer, RunEvent{Kind: SuiteStarted, SuiteIndex: planned.Index, Generation: plan.Generation.ID, Suite: planned.Suite})
 		msg := fmt.Sprintf("=== Running suite: %s ===",
-			suite.Title)
+			planned.Suite.Title)
 		ui.PrintHeader(msg)
 
-		suiteResult := runSuite(ctx, mode, suite, ctx.SecurityLevel, suiteIndex, observer, stop)
+		suiteResult := runPlannedSuite(ctx, mode, plan, planned, observer, stop)
 		suiteResults = append(suiteResults, suiteResult)
-		if len(suiteResult.Checks) == len(suite.Checks) {
-			notify(observer, RunEvent{Kind: SuiteFinished, SuiteIndex: suiteIndex, Suite: suite})
+		if len(suiteResult.Checks) == len(planned.Checks) {
+			notify(observer, RunEvent{Kind: SuiteFinished, SuiteIndex: planned.Index, Generation: plan.Generation.ID, Suite: planned.Suite})
 		}
 
 		for _, check := range suiteResult.Checks {
+			// Defensive guard: a consumer must never score a result that came
+			// from another admitted generation.
+			if check.Generation != "" && check.Generation != plan.Generation.ID {
+				continue
+			}
 			// Manual checks pass without verifying anything, so they stay out
 			// of the pass rate, as they do on the dashboard.
 			if check.Skipped || check.SkippedDistro || check.SkippedMissing || check.Manual {
@@ -128,21 +137,53 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 		}
 	}
 
+	// Republish the admitted identity after execution. Observers and checks
+	// that touched the context cannot leave the caller with a generation that
+	// disagrees with the results and score they just produced.
+	ctx.HostGeneration = plan.Generation
+	ctx.Snapshot = plan.Generation
+	ctx.Generation = plan.Generation.ID
+	ctx.GenerationID = plan.Generation.ID
+	ctx.RunGeneration = plan.Generation.ID
+	ctx.GenerationSource = plan.Generation.Source
+	ctx.PreconditionSource = plan.Generation.Source
+	ctx.GenerationStarted = plan.Generation.CapturedAt
+	ctx.CheckSetHash = plan.Generation.CheckSetHash
+	ctx.HostHash = plan.Generation.HostHash
+
 	return suiteResults, checksPassed, fixesApplied, nil
 }
 
 func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, security_level string, suiteIndex int, observer Observer, stop func() bool) config.SuiteResult {
+	// This entry point is kept for callers that execute one suite directly.
+	// RunSuitesObserved builds one plan for the whole run, so every suite and
+	// check in that path shares the same generation.
+	generation := ctx.EnsureGeneration(suite)
+
+	planned := plannedSuite{Index: suiteIndex, Suite: clonePlanSuite(suite)}
+	planned.Checks = make([]plannedCheck, 0, len(planned.Suite.Checks))
+	for checkIndex, check := range planned.Suite.Checks {
+		planned.Checks = append(planned.Checks, plannedCheck{
+			Index:    checkIndex,
+			Decision: generation.Admit(check, security_level),
+		})
+	}
+	return runPlannedSuite(ctx, mode, &runPlan{Generation: generation}, planned, observer, stop)
+}
+
+func runPlannedSuite(ctx *config.ExecContext, mode RunMode, plan *runPlan, planned plannedSuite, observer Observer, stop func() bool) config.SuiteResult {
 	var checkResults []config.CheckResult
 
 	fixedCount, notEffectiveCount, skippedCount, distroSkippedCount, missingCount, passedCount, failedCount, errorCount, manualCount := 0, 0, 0, 0, 0, 0, 0, 0, 0
-	for checkIndex, check := range suite.Checks {
+	for _, plannedCheck := range planned.Checks {
 		if stopRequested(stop) {
 			break
 		}
-		notify(observer, RunEvent{Kind: CheckStarted, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check})
-		result, ran := runCheck(ctx, mode, check, security_level)
+		check := planned.Suite.Checks[plannedCheck.Index]
+		notify(observer, RunEvent{Kind: CheckStarted, SuiteIndex: planned.Index, CheckIndex: plannedCheck.Index, Generation: plannedCheck.Decision.Generation, Check: check})
+		result, ran := runAdmittedCheck(ctx, mode, plannedCheck.Decision)
 		checkResults = append(checkResults, result)
-		notify(observer, RunEvent{Kind: CheckFinished, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check, Result: result})
+		notify(observer, RunEvent{Kind: CheckFinished, SuiteIndex: planned.Index, CheckIndex: plannedCheck.Index, Generation: plannedCheck.Decision.Generation, Check: check, Result: result})
 
 		// Print status immediately. The order matches the dashboard's
 		// classification, and errors come from the structured Error field:
@@ -186,16 +227,42 @@ func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, sec
 	summary := fmt.Sprintf("")
 	if mode == ModeAudit {
 		summary = fmt.Sprintf("Summary for '%s': %d total, %d passed, %d failed, %d errors, %d manual, %d skipped, %d distro-skipped, %d missing-command",
-			suite.Title, len(suite.Checks), passedCount, failedCount, errorCount, manualCount, skippedCount, distroSkippedCount, missingCount)
+			planned.Suite.Title, len(planned.Suite.Checks), passedCount, failedCount, errorCount, manualCount, skippedCount, distroSkippedCount, missingCount)
 	} else if mode == ModeFix {
 		summary = fmt.Sprintf("Summary for '%s': %d total, %d fixed, %d fix not effective, %d passed, %d failed, %d errors, %d manual, %d skipped, %d distro-skipped, %d missing-command",
-			suite.Title, len(suite.Checks), fixedCount, notEffectiveCount, passedCount, failedCount, errorCount, manualCount, skippedCount, distroSkippedCount, missingCount)
+			planned.Suite.Title, len(planned.Suite.Checks), fixedCount, notEffectiveCount, passedCount, failedCount, errorCount, manualCount, skippedCount, distroSkippedCount, missingCount)
 	}
 	ui.PrintSummary(summary)
 
+	generation, source, checkSetHash, hostHash := "", "", "", ""
+	if plan != nil && plan.Generation != nil {
+		generation = plan.Generation.ID
+		source = plan.Generation.Source
+		checkSetHash = plan.Generation.CheckSetHash
+		hostHash = plan.Generation.HostHash
+	}
+	incomplete := len(checkResults) < len(planned.Checks)
+	incompleteReason := ""
+	var unexecuted []string
+	if incomplete {
+		incompleteReason = fmt.Sprintf("run stopped after %d of %d checks", len(checkResults), len(planned.Checks))
+		for _, plannedCheck := range planned.Checks[len(checkResults):] {
+			unexecuted = append(unexecuted, planned.Suite.Checks[plannedCheck.Index].ID)
+		}
+	}
+
 	return config.SuiteResult{
-		Title:  suite.Title,
-		Checks: checkResults,
+		Title:            planned.Suite.Title,
+		Checks:           checkResults,
+		Generation:       generation,
+		GenerationSource: source,
+		CheckSetHash:     checkSetHash,
+		HostHash:         hostHash,
+		ExpectedChecks:   len(planned.Checks),
+		ObservedChecks:   len(checkResults),
+		UnexecutedChecks: unexecuted,
+		Incomplete:       incomplete,
+		IncompleteReason: incompleteReason,
 	}
 }
 

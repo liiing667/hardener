@@ -67,6 +67,20 @@ func DetermineSecurityFit(requestedLevel, checkLevel string) bool {
 	return check >= 0 && check <= requested
 }
 
+// FreezeSecurityFit evaluates the level decision once and returns the reason
+// that must be recorded with the check result. Run admission stores this
+// decision in its plan, so a later security-level change cannot move a check
+// into an older score.
+func FreezeSecurityFit(requestedLevel, checkLevel string) (bool, string) {
+	if DetermineSecurityFit(requestedLevel, checkLevel) {
+		return true, ""
+	}
+	if !IsSecurityLevel(checkLevel) {
+		return false, fmt.Sprintf("unknown security level %q (known: %s)", checkLevel, strings.Join(SecurityLevels, ", "))
+	}
+	return false, fmt.Sprintf("requires security level %q; selected level is %q", checkLevel, requestedLevel)
+}
+
 // UnknownSecurityLevels describes every check whose security_level is not one
 // of SecurityLevels. Such a check is skipped at every level, so a typo would
 // otherwise hide it for good.
