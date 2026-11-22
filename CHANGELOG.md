@@ -2,6 +2,15 @@
 
    ## Unreleased
 
+Dashboard recovery evidence:
+
+- Every observed run now stamps `RunEvent`, check results, suite results, and
+  saved reports with one generation and a stable event cursor. Reconnects
+  ignore already-applied events, apply out-of-order events by check identity,
+  and publish a different generation only after it covers every planned check, so a
+  restart cannot double-count a check or complete a partial stream from an old
+  summary. Legacy reports without the new optional fields still load normally.
+
    Fix verification and rollback safety (issues #13 to #18):
 
    - Checks are re-run after each fix; only a passing re-check counts as

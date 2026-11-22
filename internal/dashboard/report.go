@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"hardener/internal/config"
+	"hardener/internal/executor"
 )
 
 // resultMessage is shared by live events and saved reports, including legacy
@@ -77,26 +78,226 @@ func loadSavedReport(path string) (config.AuditReport, error) {
 	if _, exists := fields["suite_results"]; !exists || (saved.ReportType != "audit" && saved.ReportType != "fix") {
 		return saved, fmt.Errorf("expected an audit/fix report with suite_results; rollback runs.json is not a results report")
 	}
+	if saved.MixedGenerations {
+		return saved, fmt.Errorf("report is marked as mixing run generations; refusing to publish it")
+	}
+	generation, _, mixed := executor.ResultProvenance(saved.SuiteResults)
+	if mixed {
+		return saved, fmt.Errorf("report mixes run generations; refusing to publish a mixed snapshot")
+	}
+	headerGeneration := saved.Generation
+	if headerGeneration == "" {
+		headerGeneration = saved.RunGeneration
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.SourceGeneration
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.GenerationSource
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.GenerationID
+	}
+	if headerGeneration != "" && generation != "" && headerGeneration != generation {
+		return saved, fmt.Errorf("report generation %q does not match its results (%q)", headerGeneration, generation)
+	}
 	return saved, nil
 }
 
 func (m *model) setReport(saved config.AuditReport, path string) {
 	m.viewing, m.done, m.opening, m.follow = true, true, false, false
 	m.stopping, m.incomplete, m.runErr = false, saved.Incomplete, nil
+	m.incompleteReason = saved.IncompleteReason
+	m.mixedGenerations = saved.MixedGenerations
+	resultGeneration, _, mixed := executor.ResultProvenance(saved.SuiteResults)
+	if mixed {
+		m.incomplete = true
+		m.mixedGenerations = true
+		if m.incompleteReason == "" {
+			m.incompleteReason = "mixed_run_generations"
+		}
+	}
+	headerGeneration := saved.Generation
+	if headerGeneration == "" {
+		headerGeneration = saved.RunGeneration
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.SourceGeneration
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.GenerationSource
+	}
+	if headerGeneration == "" {
+		headerGeneration = saved.GenerationID
+	}
+	if headerGeneration != "" && resultGeneration != "" && headerGeneration != resultGeneration {
+		m.incomplete = true
+		m.mixedGenerations = true
+		if m.incompleteReason == "" {
+			m.incompleteReason = "mixed_run_generations"
+		}
+	}
 	m.source, m.selected, m.active, m.focus = path, 0, -1, 0
+	m.generation, m.generationID = saved.Generation, saved.Generation
+	if m.generation == "" {
+		m.generation = saved.RunGeneration
+		m.generationID = saved.RunGeneration
+	}
+	if m.generation == "" {
+		m.generation = saved.SourceGeneration
+		m.generationID = saved.SourceGeneration
+	}
+	if m.generation == "" {
+		m.generation = saved.GenerationSource
+		m.generationID = saved.GenerationSource
+	}
+	if m.generation == "" {
+		m.generation = saved.GenerationID
+		m.generationID = saved.GenerationID
+	}
+	if m.generationID == "" {
+		m.generationID = saved.GenerationID
+	}
+	m.generationSeq = saved.GenerationSeq
+	m.cursor, m.eventCursor, m.lastCursor = saved.Cursor, saved.EventCursor, saved.LastCursor
+	if saved.LastCursor > m.cursor {
+		m.cursor = saved.LastCursor
+	}
+	if saved.EventCursor > m.cursor {
+		m.cursor = saved.EventCursor
+	}
+	m.eventCursor, m.lastCursor = m.cursor, m.cursor
+	m.seenEvents = make(map[string]struct{})
+	m.deferredEvents = make(map[string][]executor.RunEvent)
+	m.startedSuites = make(map[int]bool)
+	m.startedChecks = make(map[int]map[int]bool)
 	m.options = Options{Mode: saved.ReportType, System: saved.OS + " / " + saved.Arch + " · " + saved.Distro}
 	m.savedAt = "timestamp not recorded"
 	if !saved.Timestamp.IsZero() {
 		m.savedAt = saved.Timestamp.Format(time.RFC3339)
 	}
 	m.suites, m.logs = nil, nil
+	if m.generation == "" {
+		for _, s := range saved.SuiteResults {
+			if s.Generation != "" {
+				m.generation, m.generationID = s.Generation, s.Generation
+				m.generationSeq = s.GenerationSeq
+				break
+			}
+		}
+	}
 	for _, s := range saved.SuiteResults {
-		state := suiteState{title: cleanText(s.Title), total: len(s.Checks), results: make(map[int]config.CheckResult), done: true}
+		if s.GenerationSeq > m.generationSeq {
+			m.generationSeq = s.GenerationSeq
+		}
+		if m.generation == "" {
+			switch {
+			case s.Generation != "":
+				m.generation, m.generationID = s.Generation, s.Generation
+			case s.SourceGeneration != "":
+				m.generation, m.generationID = s.SourceGeneration, s.SourceGeneration
+			case s.GenerationSource != "":
+				m.generation, m.generationID = s.GenerationSource, s.GenerationSource
+			case s.GenerationID != "":
+				m.generation, m.generationID = s.GenerationID, s.GenerationID
+			}
+		}
+		state := suiteState{
+			title: cleanText(s.Title), total: len(s.Checks), results: make(map[int]config.CheckResult), done: true,
+			generation: s.Generation, generationSeq: s.GenerationSeq, cursor: s.LastCursor,
+		}
+		if state.generation == "" {
+			state.generation = s.GenerationID
+		}
+		if state.generation == "" {
+			state.generation = s.SourceGeneration
+		}
+		if state.generation == "" {
+			state.generation = s.GenerationSource
+		}
+		if state.cursor == 0 {
+			switch {
+			case s.EventCursor > 0:
+				state.cursor = s.EventCursor
+			case s.Cursor > 0:
+				state.cursor = s.Cursor
+			}
+		}
 		for i, r := range s.Checks {
 			state.results[i] = r
+			if state.generation == "" && r.Generation != "" {
+				state.generation = r.Generation
+				state.generationSeq = r.GenerationSeq
+			}
+			if state.generation == "" && r.SourceGeneration != "" {
+				state.generation = r.SourceGeneration
+				state.generationSeq = r.GenerationSeq
+			}
+			if state.generation == "" && r.GenerationSource != "" {
+				state.generation = r.GenerationSource
+				state.generationSeq = r.GenerationSeq
+			}
+			if state.generation == "" && r.GenerationID != "" {
+				state.generation = r.GenerationID
+				state.generationSeq = r.GenerationSeq
+			}
+			if r.Cursor > m.cursor {
+				m.cursor = r.Cursor
+			}
+			if r.GenerationSeq > m.generationSeq {
+				m.generationSeq = r.GenerationSeq
+			}
+			if r.GenerationSeq > state.generationSeq {
+				state.generationSeq = r.GenerationSeq
+			}
+			if r.Cursor > state.cursor {
+				state.cursor = r.Cursor
+			}
+			if r.Generation != "" && m.generation == "" {
+				m.generation, m.generationID = r.Generation, r.Generation
+				m.generationSeq = r.GenerationSeq
+			}
+			if m.generation == "" && r.SourceGeneration != "" {
+				m.generation, m.generationID = r.SourceGeneration, r.SourceGeneration
+				m.generationSeq = r.GenerationSeq
+			}
+			if m.generation == "" && r.GenerationSource != "" {
+				m.generation, m.generationID = r.GenerationSource, r.GenerationSource
+				m.generationSeq = r.GenerationSeq
+			}
+			if m.generation == "" && r.GenerationID != "" {
+				m.generation, m.generationID = r.GenerationID, r.GenerationID
+				m.generationSeq = r.GenerationSeq
+			}
+		}
+		if s.LastCursor > m.cursor {
+			m.cursor = s.LastCursor
+		}
+		if s.LastCursor > state.cursor {
+			state.cursor = s.LastCursor
+		}
+		if s.Cursor > m.cursor {
+			m.cursor = s.Cursor
+		}
+		if s.Cursor > state.cursor {
+			state.cursor = s.Cursor
+		}
+		if s.EventCursor > m.cursor {
+			m.cursor = s.EventCursor
+		}
+		if s.EventCursor > state.cursor {
+			state.cursor = s.EventCursor
+		}
+		m.startedSuites[len(m.suites)] = true
+		for i := range s.Checks {
+			if m.startedChecks[len(m.suites)] == nil {
+				m.startedChecks[len(m.suites)] = make(map[int]bool)
+			}
+			m.startedChecks[len(m.suites)][i] = true
 		}
 		m.suites = append(m.suites, state)
 	}
+	m.eventCursor, m.lastCursor = m.cursor, m.cursor
 	m.logOffset = m.reportTopOffset()
 }
 

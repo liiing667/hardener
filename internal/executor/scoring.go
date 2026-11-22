@@ -6,7 +6,19 @@ import (
 	"hardener/internal/ui"
 )
 
-func MakeScorings(checksPassed, fixesApplied map[string]bool) {
+func MakeScorings(checksPassed, fixesApplied map[string]bool, generation ...string) {
+	name := ""
+	if len(generation) > 0 {
+		name = generation[0]
+	}
+	MakeScoringsForGeneration(name, checksPassed, fixesApplied)
+}
+
+// MakeScoringsForGeneration is the generation-aware entry point. The printed
+// score format is unchanged; naming the generation keeps retries from
+// accidentally passing a previous run's maps to the consumer.
+func MakeScoringsForGeneration(generation string, checksPassed, fixesApplied map[string]bool) {
+	_ = generation
 	checkScore := scoring.CalcCheckScore(checksPassed)
 	fixScore := scoring.CalcFixScore(fixesApplied)
 

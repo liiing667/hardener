@@ -107,6 +107,16 @@ type CheckResult struct {
 	SkipReason  string `json:"skip_reason,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Manual      bool   `json:"manual,omitempty"`
+	// Generation and Cursor bind this result to the event stream that produced
+	// it. They are optional so reports written before run evidence existed
+	// keep their old shape and remain readable.
+	Generation   string `json:"generation,omitempty"`
+	GenerationID string `json:"generation_id,omitempty"`
+	SourceGeneration string `json:"source_generation,omitempty"`
+	GenerationSource string `json:"generation_source,omitempty"`
+	GenerationSeq uint64 `json:"generation_seq,omitempty"`
+	Cursor       uint64 `json:"cursor,omitempty"`
+	EventCursor  uint64 `json:"event_cursor,omitempty"`
 	ID          string `json:"id"`
 	Description string `json:"description"`
 	Passed      bool   `json:"passed"`
@@ -124,17 +134,41 @@ type CheckResult struct {
 type SuiteResult struct {
 	Title  string        `json:"title"`
 	Checks []CheckResult `json:"checks"`
+	// Generation/LastCursor identify the run snapshot and the last event
+	// applied to this suite. Legacy reports omit both fields.
+	Generation   string `json:"generation,omitempty"`
+	GenerationID string `json:"generation_id,omitempty"`
+	SourceGeneration string `json:"source_generation,omitempty"`
+	GenerationSource string `json:"generation_source,omitempty"`
+	GenerationSeq uint64 `json:"generation_seq,omitempty"`
+	Cursor       uint64 `json:"cursor,omitempty"`
+	EventCursor  uint64 `json:"event_cursor,omitempty"`
+	LastCursor   uint64 `json:"last_cursor,omitempty"`
 }
 
 // Full audit report
 type AuditReport struct {
-	Incomplete   bool          `json:"incomplete,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	OS           string        `json:"os"`
-	Arch         string        `json:"arch"`
-	Distro       string        `json:"distro"`
-	SuiteResults []SuiteResult `json:"suite_results"`
-	ReportType   string        `json:"report_type"`
+	Incomplete       bool   `json:"incomplete,omitempty"`
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+	// Generation, RunGeneration and GenerationID are equivalent aliases for
+	// the run identity. Cursor/EventCursor/LastCursor name the last committed
+	// event so a restarted consumer can resume without replaying old results.
+	Generation       string    `json:"generation,omitempty"`
+	RunGeneration    string    `json:"run_generation,omitempty"`
+	GenerationID     string    `json:"generation_id,omitempty"`
+	SourceGeneration string    `json:"source_generation,omitempty"`
+	GenerationSource string    `json:"generation_source,omitempty"`
+	GenerationSeq    uint64    `json:"generation_seq,omitempty"`
+	Cursor           uint64    `json:"cursor,omitempty"`
+	EventCursor      uint64    `json:"event_cursor,omitempty"`
+	LastCursor       uint64    `json:"last_cursor,omitempty"`
+	MixedGenerations bool      `json:"mixed_generations,omitempty"`
+	Timestamp        time.Time `json:"timestamp"`
+	OS               string    `json:"os"`
+	Arch             string    `json:"arch"`
+	Distro           string    `json:"distro"`
+	SuiteResults     []SuiteResult `json:"suite_results"`
+	ReportType       string        `json:"report_type"`
 }
 
 type SystemInfo struct {

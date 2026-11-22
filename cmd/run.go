@@ -229,7 +229,7 @@ func executeRun(cmd *cobra.Command, mode executor.RunMode, title string, descrip
 			reportType = "fix"
 		}
 		executor.MakeReportWithStatus(sys, suiteResults, reportType, stop != nil && stop())
-		executor.MakeScorings(checksPassed, fixesApplied)
+		executor.MakeScorings(checksPassed, fixesApplied, ctx.Generation)
 		return runErr
 	}
 	useTUI, _ := cmd.Flags().GetBool("tui")

@@ -16,6 +16,17 @@ type ExecContext struct {
 	Extra        map[string]interface{}
 	// DryRun lists the fix each failing check would get instead of running it.
 	DryRun bool
+
+	// Run evidence published by RunSuitesObserved. Generation changes on
+	// every observed run, even when the caller reuses the same context.
+	// EventCursor is the last event committed by that run.
+	Generation   string
+	GenerationID string
+	SourceGeneration string
+	GenerationSource string
+	GenerationSeq uint64
+	EventCursor  uint64
+	Cursor       uint64
 }
 
 // Create a new context

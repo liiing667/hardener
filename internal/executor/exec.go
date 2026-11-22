@@ -87,10 +87,26 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 	suites []config.TestSuite, observer Observer, stop func() bool) (
 	[]config.SuiteResult, map[string]bool, map[string]bool, error) {
 
+	if ctx == nil {
+		ctx = &config.ExecContext{}
+	}
+	generation, generationSequence := newRunIdentity()
+	ctx.Generation = generation
+	ctx.GenerationID = generation
+	ctx.SourceGeneration = generation
+	ctx.GenerationSource = generation
+	ctx.GenerationSeq = generationSequence
+	ctx.EventCursor = 0
+	ctx.Cursor = 0
 	if len(suites) == 0 {
 		// All return statements must now include a nil error.
 		return nil, nil, nil, fmt.Errorf("error: No hardening guides (.md files with checks) found at the defined position: %s", ctx.BaseDir)
 	}
+
+	// One observed run owns one generation and one event cursor sequence.
+	// A retry calls this function again and therefore cannot reuse either the
+	// previous generation or the previous cursor.
+	journal := &runJournal{generation: generation, sequence: generationSequence, observer: observer, ctx: ctx}
 
 	checksPassed := make(map[string]bool)
 	fixesApplied := make(map[string]bool)
@@ -103,35 +119,70 @@ func RunSuitesObserved(ctx *config.ExecContext, mode RunMode, osName, archName s
 		if stopRequested(stop) {
 			break
 		}
-		notify(observer, RunEvent{Kind: SuiteStarted, SuiteIndex: suiteIndex, Suite: suite})
+		journal.emit(RunEvent{Kind: SuiteStarted, SuiteIndex: suiteIndex, Suite: suite})
 		msg := fmt.Sprintf("=== Running suite: %s ===",
 			suite.Title)
 		ui.PrintHeader(msg)
 
-		suiteResult := runSuite(ctx, mode, suite, ctx.SecurityLevel, suiteIndex, observer, stop)
+		suiteResult := runSuiteObserved(ctx, mode, suite, ctx.SecurityLevel, suiteIndex, journal, stop)
+		suiteResult.Generation = generation
+		suiteResult.GenerationID = generation
+		suiteResult.SourceGeneration = generation
+		suiteResult.GenerationSource = generation
+		suiteResult.GenerationSeq = generationSequence
+		suiteResult.Cursor = journal.cursor
+		suiteResult.EventCursor = journal.cursor
+		suiteResult.LastCursor = journal.cursor
 		suiteResults = append(suiteResults, suiteResult)
 		if len(suiteResult.Checks) == len(suite.Checks) {
-			notify(observer, RunEvent{Kind: SuiteFinished, SuiteIndex: suiteIndex, Suite: suite})
+			journal.emit(RunEvent{Kind: SuiteFinished, SuiteIndex: suiteIndex, Suite: suite})
+			suiteResults[len(suiteResults)-1].Cursor = journal.cursor
+			suiteResults[len(suiteResults)-1].EventCursor = journal.cursor
+			suiteResults[len(suiteResults)-1].LastCursor = journal.cursor
 		}
 
-		for _, check := range suiteResult.Checks {
+		for checkIndex, check := range suiteResult.Checks {
 			// Manual checks pass without verifying anything, so they stay out
 			// of the pass rate, as they do on the dashboard.
 			if check.Skipped || check.SkippedDistro || check.SkippedMissing || check.Manual {
 				continue
 			}
-			checksPassed[check.ID] = check.Passed
+			checksPassed[uniqueCheckKey(checksPassed, check.ID, suiteIndex, checkIndex)] = check.Passed
 			if !check.Passed && mode == ModeFix {
 				// Only a fix the re-run check confirmed counts as applied.
-				fixesApplied[check.ID] = check.FixVerified
+				fixesApplied[uniqueCheckKey(fixesApplied, check.ID, suiteIndex, checkIndex)] = check.FixVerified
 			}
 		}
 	}
+
+	// Publish the same identity the events and result entries carry, after
+	// execution. A consumer that reads the context after the run sees the
+	// committed generation and cursor rather than a stale prior attempt.
+	ctx.Generation = generation
+	ctx.GenerationID = generation
+	ctx.SourceGeneration = generation
+	ctx.GenerationSource = generation
+	ctx.GenerationSeq = generationSequence
+	ctx.EventCursor = journal.cursor
+	ctx.Cursor = journal.cursor
 
 	return suiteResults, checksPassed, fixesApplied, nil
 }
 
 func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, security_level string, suiteIndex int, observer Observer, stop func() bool) config.SuiteResult {
+	generation, sequence := newRunIdentity()
+	return runSuiteObserved(ctx, mode, suite, security_level, suiteIndex,
+		&runJournal{generation: generation, sequence: sequence, observer: observer, ctx: ctx}, stop)
+}
+
+func runSuiteObserved(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, security_level string, suiteIndex int, journal *runJournal, stop func() bool) config.SuiteResult {
+	if ctx == nil {
+		ctx = &config.ExecContext{}
+	}
+	if journal == nil {
+		generation, sequence := newRunIdentity()
+		journal = &runJournal{generation: generation, sequence: sequence, ctx: ctx}
+	}
 	var checkResults []config.CheckResult
 
 	fixedCount, notEffectiveCount, skippedCount, distroSkippedCount, missingCount, passedCount, failedCount, errorCount, manualCount := 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -139,10 +190,17 @@ func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, sec
 		if stopRequested(stop) {
 			break
 		}
-		notify(observer, RunEvent{Kind: CheckStarted, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check})
+		journal.emit(RunEvent{Kind: CheckStarted, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check})
 		result, ran := runCheck(ctx, mode, check, security_level)
+		result.Generation = journal.generation
+		result.GenerationID = journal.generation
+		result.SourceGeneration = journal.generation
+		result.GenerationSource = journal.generation
+		result.GenerationSeq = journal.sequence
+		resultCursor := journal.emit(RunEvent{Kind: CheckFinished, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check, Result: result})
+		result.Cursor = resultCursor
+		result.EventCursor = resultCursor
 		checkResults = append(checkResults, result)
-		notify(observer, RunEvent{Kind: CheckFinished, SuiteIndex: suiteIndex, CheckIndex: checkIndex, Check: check, Result: result})
 
 		// Print status immediately. The order matches the dashboard's
 		// classification, and errors come from the structured Error field:
@@ -194,9 +252,30 @@ func runSuite(ctx *config.ExecContext, mode RunMode, suite config.TestSuite, sec
 	ui.PrintSummary(summary)
 
 	return config.SuiteResult{
-		Title:  suite.Title,
-		Checks: checkResults,
+		Title:        suite.Title,
+		Checks:       checkResults,
+		Generation:   journal.generation,
+		GenerationID: journal.generation,
+		SourceGeneration: journal.generation,
+		GenerationSource: journal.generation,
+		GenerationSeq: journal.sequence,
+		Cursor:       journal.cursor,
+		EventCursor:  journal.cursor,
+		LastCursor:   journal.cursor,
 	}
+}
+
+// uniqueCheckKey preserves the historical ID-keyed score map for ordinary
+// checks, but gives a stable position to a repeated ID so two distinct
+// checks cannot silently overwrite each other's result.
+func uniqueCheckKey(existing map[string]bool, id string, suiteIndex, checkIndex int) string {
+	if id == "" {
+		id = fmt.Sprintf("check-%d.%d", suiteIndex, checkIndex)
+	}
+	if _, exists := existing[id]; !exists {
+		return id
+	}
+	return fmt.Sprintf("%s@suite%d.check%d", id, suiteIndex, checkIndex)
 }
 
 func suiteMatchesLabels(suite config.TestSuite, requested []string) bool {

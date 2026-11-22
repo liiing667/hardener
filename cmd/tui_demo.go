@@ -26,16 +26,31 @@ func init() {
 			}
 			return closeDashboard(dashboard.Run(dashboard.Options{Mode: "DEMO", System: "SIMULATED · no commands executed", SecurityLevel: "baseline"}, suites,
 				func(observer executor.Observer, stop func() bool) error {
+					generation := executor.NewRunGeneration()
+					cursor := uint64(0)
+					emit := func(event executor.RunEvent) {
+						cursor++
+						event.Generation, event.GenerationID = generation, generation
+						event.SourceGeneration, event.GenerationSource = generation, generation
+						event.Cursor, event.EventCursor = cursor, cursor
+						event.Sequence, event.Seq = cursor, cursor
+						if event.Kind == executor.CheckFinished {
+							event.Result.Generation, event.Result.GenerationID = generation, generation
+							event.Result.SourceGeneration, event.Result.GenerationSource = generation, generation
+							event.Result.Cursor, event.Result.EventCursor = cursor, cursor
+						}
+						observer(event)
+					}
 					for si, suite := range suites {
 						if stop() {
 							break
 						}
-						observer(executor.RunEvent{Kind: executor.SuiteStarted, SuiteIndex: si, Suite: suite})
+						emit(executor.RunEvent{Kind: executor.SuiteStarted, SuiteIndex: si, Suite: suite})
 						for ci, check := range suite.Checks {
 							if stop() {
 								return nil
 							}
-							observer(executor.RunEvent{Kind: executor.CheckStarted, SuiteIndex: si, CheckIndex: ci, Check: check})
+							emit(executor.RunEvent{Kind: executor.CheckStarted, SuiteIndex: si, CheckIndex: ci, Check: check})
 							time.Sleep(220 * time.Millisecond)
 							result := config.CheckResult{ID: check.ID, Passed: true, Output: "Simulated configuration meets the expected value"}
 							switch {
@@ -56,9 +71,9 @@ func init() {
 								result.FixVerified = true
 								result.Output = "Simulated fix applied and verified by re-check"
 							}
-							observer(executor.RunEvent{Kind: executor.CheckFinished, SuiteIndex: si, CheckIndex: ci, Check: check, Result: result})
+							emit(executor.RunEvent{Kind: executor.CheckFinished, SuiteIndex: si, CheckIndex: ci, Check: check, Result: result})
 						}
-						observer(executor.RunEvent{Kind: executor.SuiteFinished, SuiteIndex: si, Suite: suite})
+						emit(executor.RunEvent{Kind: executor.SuiteFinished, SuiteIndex: si, Suite: suite})
 					}
 					return nil
 				}))

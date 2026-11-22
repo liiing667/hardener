@@ -154,3 +154,15 @@ activity pane pauses automatic category following too.
 
 Run-wide notices (such as report saving or completion) remain visible in every
 category and carry a [RUN] prefix. Saved-report navigation works as before.
+
+## Reconnect and event evidence
+
+Each observed run has a generation identity and a monotonic event cursor.
+`RunEvent`, check results, suite results, and saved reports retain both, so a
+restarted consumer can tell a replay from a new run. The dashboard discards an
+event it already applied, applies out-of-order events by check identity, and
+stages a different generation until it covers every planned check.
+A reconnect that only delivered the second half of a run therefore keeps the
+complete old snapshot instead of filling missing checks from old results.
+Normal live updates and single-suite runs continue to render immediately. The
+footer shows the active generation and the last committed cursor.

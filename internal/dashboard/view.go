@@ -153,6 +153,12 @@ func (m model) View() string {
 	if m.viewing {
 		footer = paint("tab focus  ↑/↓ browse  home/end scroll  o open JSON  q close", muted)
 	}
+	if m.generation != "" {
+		// Keep the run identity visible after a reconnect or saved-report
+		// reload. The cursor is the last event this page has committed.
+		label := strings.ReplaceAll(cleanText(m.generation), "\n", " ")
+		footer = paint(fmt.Sprintf("generation %s · cursor %d", label, m.cursor), muted) + "  ·  " + footer
+	}
 	legend := paint("Score = passed / assessed. Skipped & manual excluded; fixes need re-audit.", muted)
 	return fitRows(header+"\n"+meta+"\n\n"+metrics+"\n\n"+body+"\n"+footer+"\n"+legend, m.width, m.height)
 }
