@@ -320,16 +320,46 @@ func stderrSuffix(stderr string) string {
 	return fmt.Sprintf(" (stderr: %s)", strings.Join(lines, "; "))
 }
 
+type fixAttemptResult struct {
+	Applied      bool
+	Output       string
+	Manual       bool
+	CommandError error
+	BackupError  error
+	PrepareError error
+}
+
 // RunFix executes the fix for a check and safely handles errors. applied only
 // means the fix command exited 0; runCheck re-runs the check to verify it.
 func RunFix(ctx *config.ExecContext, check config.Check) (applied bool, output string, err error) {
+	result := runFixAttempt(ctx, check, nil)
+	switch {
+	case result.BackupError != nil:
+		return false, result.Output, result.BackupError
+	case result.PrepareError != nil:
+		return false, result.Output, result.PrepareError
+	case result.Manual:
+		return false, result.Output, nil
+	case result.CommandError != nil:
+		// Preserve the historical RunFix contract: a non-zero fix command is
+		// reported through the applied flag and output, not as a backup error.
+		return false, result.Output, nil
+	default:
+		return result.Applied, result.Output, nil
+	}
+}
+
+// runFixAttempt runs the fix command and completes its rollback record. The
+// prepare callback runs after the pre-fix state is captured and before the fix
+// command, so callers can persist that state under the same fix identity.
+func runFixAttempt(ctx *config.ExecContext, check config.Check, prepare func(*rollback.Txn) error) fixAttemptResult {
 	if isManualAction(check.Fix) {
 		ui.PrintInfo(fmt.Sprintf("Check %s: %s", check.ID, check.Fix))
-		return false, "Manual intervention required", nil
+		return fixAttemptResult{Manual: true, Output: "Manual intervention required"}
 	}
 
 	if strings.TrimSpace(check.Fix) == "" {
-		return false, "", fmt.Errorf("no fix defined for check %s", check.ID)
+		return fixAttemptResult{PrepareError: fmt.Errorf("no fix defined for check %s", check.ID)}
 	}
 
 	ui.PrintInfo(fmt.Sprintf("Fixing %s with: %s", check.ID, check.Fix))
@@ -357,12 +387,21 @@ func RunFix(ctx *config.ExecContext, check config.Check) (applied bool, output s
 	txn, backupErr := rollback.Begin(ctx, check)
 	if backupErr != nil {
 		ui.PrintErrorMessage(fmt.Sprintf("Fix for check %s not applied: %v", check.ID, backupErr))
-		return false, "", fmt.Errorf("rollback backup failed, fix not applied: %w", backupErr)
+		return fixAttemptResult{BackupError: fmt.Errorf("rollback backup failed, fix not applied: %w", backupErr)}
+	}
+
+	if prepare != nil {
+		if err := prepare(txn); err != nil {
+			if commitErr := txn.Commit(); commitErr != nil {
+				ui.PrintErrorMessage(fmt.Sprintf("Rollback record for check %s left pending: %v", check.ID, commitErr))
+			}
+			return fixAttemptResult{PrepareError: err}
+		}
 	}
 
 	// Run the fix command
 	runErr := cmd.Run()
-	output = strings.TrimSpace(out.String())
+	output := strings.TrimSpace(out.String())
 
 	// Complete the record even when the fix failed: it may have changed
 	// something before exiting. On failure the pending record is kept and
@@ -377,10 +416,10 @@ func RunFix(ctx *config.ExecContext, check config.Check) (applied bool, output s
 
 	if runErr != nil {
 		ui.PrintErrorMessage(fmt.Sprintf("Fix command for check %s exited with error: %v\nOutput:\n%s", check.ID, runErr, output))
-		return false, output, nil
+		return fixAttemptResult{Output: output, CommandError: runErr}
 	}
 
-	return true, output, nil
+	return fixAttemptResult{Applied: true, Output: output}
 }
 
 // fixUsesSudo reports whether a check's fix runs under sudo: fix_sudo when

@@ -80,6 +80,14 @@ after the fix. A fix whose command succeeds while the check still fails is
 reported as *not effective*, often because its `post_action` (a reboot or a
 service restart) is still due.
 
+Fix attempts and their re-checks are recorded in `fix-transactions.json`
+under one stable fix ID. One entry keeps the check, target, pre-fix checksum,
+fix result, verification result, stage and failure location. A re-check that
+fails leaves the entry pending, and a later run can complete only that same
+entry. A failed fix that happens to leave the check passing remains pending,
+so the report cannot present a modified file as a verified repair. Read-only
+audits do not write fix state.
+
 Before each fix, its `affected_file` and any live kernel values the check
 reads (`/proc/sys/...`, `sysctl -n/-w <key>`) are written to `runs.json`. If
 that backup fails, the fix is skipped. Rollback removes files a fix created,

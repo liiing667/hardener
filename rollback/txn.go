@@ -225,6 +225,15 @@ func Begin(ctx *config.ExecContext, check config.Check) (*Txn, error) {
 // File returns the backed-up file, or "" when the check names none.
 func (t *Txn) File() string { return t.file }
 
+// PreState exposes the frozen pre-fix state of the backed-up file. The
+// executor stores it with the fix transaction before the fix command runs.
+func (t *Txn) PreState() (exists bool, checksum string, perm uint32) {
+	if t == nil {
+		return false, "", 0
+	}
+	return t.pre.exists, t.pre.digest(), uint32(t.pre.perm & backupModeMask)
+}
+
 // Commit completes the pending records with the state the fix left behind.
 // It must run whether or not the fix succeeded, since a failing fix may still
 // have changed something. A record that cannot be completed stays pending and

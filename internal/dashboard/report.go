@@ -49,6 +49,25 @@ func resultMessage(r config.CheckResult) (string, string) {
 	if r.Error != "" && !strings.Contains(detail, r.Error) {
 		detail += "\nError: " + r.Error
 	}
+	if r.FixID != "" || r.FixResult != "" || r.VerifyResult != "" || r.Pending || r.FailureLocation != "" {
+		stage := r.Stage
+		if stage == "" {
+			stage = "unknown"
+		}
+		detail += "\nStage: " + stage
+		if r.FixResult != "" {
+			detail += " · Fix: " + r.FixResult
+		}
+		if r.VerifyResult != "" {
+			detail += " · Verify: " + r.VerifyResult
+		}
+		if r.FixID != "" {
+			detail += "\nFix ID: " + r.FixID
+		}
+		if r.FailureLocation != "" && !strings.Contains(detail, r.FailureLocation) {
+			detail += "\nLocation: " + r.FailureLocation
+		}
+	}
 	return level, r.ID + " · " + detail
 }
 

@@ -58,6 +58,11 @@
      hooks for all other files. It never writes through such a link
    - The rollback hook restarts `sshd.service` or `ssh.service`, whichever
      exists, and only if running; it reloads systemd after restoring unit files
+   - Fix attempts and their re-checks share a persisted completion identity.
+     A fix whose re-check fails, a failed fix that leaves the check passing,
+     and a process restart during verification stay pending instead of being
+     reported as hardened. Reports keep the fix result, verification result,
+     stage and failure location for each check
    - A `---` line inside a block scalar (e.g. a heredoc in a `fix: |`) no
      longer splits the YAML document; `---` elsewhere separates documents at
      any indentation, as before

@@ -101,6 +101,64 @@ type TestSuite struct {
 	Checks []Check  `yaml:"checksuites"`
 }
 
+// Fix stages name the last phase a check reached. They are stored in reports
+// so a consumer can tell a failed fix from a fix whose re-check failed.
+const (
+	FixStageCheck    = "check"
+	FixStageFix      = "fix"
+	FixStageVerify   = "verify"
+	FixStageComplete = "complete"
+	FixStageState    = "state"
+)
+
+// Fix result values describe the fix command outcome, never the re-check.
+const (
+	FixResultApplied = "applied"
+	FixResultFailed  = "failed"
+	FixResultManual  = "manual"
+	FixResultPending = "pending"
+	FixResultNotRun  = "not_run"
+)
+
+// Verification result values describe the re-run check after the fix.
+const (
+	VerifyResultPassed  = "passed"
+	VerifyResultFailed  = "failed"
+	VerifyResultError   = "error"
+	VerifyResultPending = "pending"
+	VerifyResultNotRun  = "not_run"
+)
+
+// FixEvidence is the per-check transaction record shared by the executor and
+// the saved report. A completed check carries a successful fix result and a
+// passing verification result under the same ID.
+type FixEvidence struct {
+	ID              string `json:"id,omitempty"`
+	Generation      string `json:"generation,omitempty"`
+	CompletionID    string `json:"completion_id,omitempty"`
+	Stage           string `json:"stage,omitempty"`
+	CheckCommand    string `json:"check_command,omitempty"`
+	Expected        string `json:"expected,omitempty"`
+	PostAction      string `json:"post_action,omitempty"`
+	FixResult       string `json:"fix_result,omitempty"`
+	FixCommand      string `json:"fix_command,omitempty"`
+	FixOutput       string `json:"fix_output,omitempty"`
+	FixError        string `json:"fix_error,omitempty"`
+	VerifyResult    string `json:"verify_result,omitempty"`
+	VerifyCommand   string `json:"verify_command,omitempty"`
+	VerifyOutput    string `json:"verify_output,omitempty"`
+	VerifyError     string `json:"verify_error,omitempty"`
+	Target          string `json:"target,omitempty"`
+	BeforeExists    bool   `json:"before_exists"`
+	BeforeChecksum  string `json:"before_checksum,omitempty"`
+	BeforePerm      uint32 `json:"before_perm,omitempty"`
+	FailureStage    string `json:"failure_stage,omitempty"`
+	FailureLocation string `json:"failure_location,omitempty"`
+	Pending         bool   `json:"pending,omitempty"`
+	Completed       bool   `json:"completed,omitempty"`
+	Attempts        int    `json:"attempts,omitempty"`
+}
+
 // Individual check result
 type CheckResult struct {
 	// Structured status for reports and dashboards; never infer errors from output text.
@@ -112,12 +170,36 @@ type CheckResult struct {
 	Passed      bool   `json:"passed"`
 	// FixApplied means the fix command exited 0. FixVerified means the check
 	// was re-run afterwards and passed; only that counts as fixed.
-	FixApplied     bool   `json:"fix_applied"`
-	FixVerified    bool   `json:"fix_verified,omitempty"`
-	Output         string `json:"output"`
-	Skipped        bool   `json:"skipped"`
-	SkippedDistro  bool   `json:"skipped_distro"`
-	SkippedMissing bool   `json:"skipped_missing"`
+	FixApplied  bool `json:"fix_applied"`
+	FixVerified bool `json:"fix_verified,omitempty"`
+	// Stage is the last phase this item reached: check, fix, verify, complete
+	// or state. Status summarises the item without replacing the boolean
+	// fields older consumers already read.
+	Stage  string `json:"stage,omitempty"`
+	Status string `json:"status,omitempty"`
+	// FixID is the durable identity shared by the fix attempt and its
+	// verification across failure, retry and restart. FixGeneration repeats it
+	// for consumers that name the same value a generation.
+	FixID         string `json:"fix_id,omitempty"`
+	FixGeneration string `json:"fix_generation,omitempty"`
+	CompletionID  string `json:"completion_id,omitempty"`
+	FixResult     string `json:"fix_result,omitempty"`
+	FixOutput     string `json:"fix_output,omitempty"`
+	FixError      string `json:"fix_error,omitempty"`
+	VerifyResult  string `json:"verify_result,omitempty"`
+	// VerificationResult is the long-form alias of VerifyResult.
+	VerificationResult string       `json:"verification_result,omitempty"`
+	VerifyOutput       string       `json:"verify_output,omitempty"`
+	VerifyError        string       `json:"verify_error,omitempty"`
+	FailureStage       string       `json:"failure_stage,omitempty"`
+	FailureLocation    string       `json:"failure_location,omitempty"`
+	Location           string       `json:"location,omitempty"`
+	Pending            bool         `json:"pending,omitempty"`
+	FixEvidence        *FixEvidence `json:"fix_evidence,omitempty"`
+	Output             string       `json:"output"`
+	Skipped            bool         `json:"skipped"`
+	SkippedDistro      bool         `json:"skipped_distro"`
+	SkippedMissing     bool         `json:"skipped_missing"`
 }
 
 // Suite result
@@ -126,15 +208,37 @@ type SuiteResult struct {
 	Checks []CheckResult `json:"checks"`
 }
 
+// FixOutcome is the report-level index of a per-check fix transaction.
+type FixOutcome struct {
+	CheckID         string `json:"check_id"`
+	FixID           string `json:"fix_id,omitempty"`
+	CompletionID    string `json:"completion_id,omitempty"`
+	Stage           string `json:"stage,omitempty"`
+	FixResult       string `json:"fix_result,omitempty"`
+	VerifyResult    string `json:"verify_result,omitempty"`
+	FailureStage    string `json:"failure_stage,omitempty"`
+	FailureLocation string `json:"failure_location,omitempty"`
+	Completed       bool   `json:"completed"`
+	Pending         bool   `json:"pending,omitempty"`
+}
+
 // Full audit report
 type AuditReport struct {
-	Incomplete   bool          `json:"incomplete,omitempty"`
-	Timestamp    time.Time     `json:"timestamp"`
-	OS           string        `json:"os"`
-	Arch         string        `json:"arch"`
-	Distro       string        `json:"distro"`
-	SuiteResults []SuiteResult `json:"suite_results"`
-	ReportType   string        `json:"report_type"`
+	Incomplete       bool          `json:"incomplete,omitempty"`
+	IncompleteReason string        `json:"incomplete_reason,omitempty"`
+	Timestamp        time.Time     `json:"timestamp"`
+	OS               string        `json:"os"`
+	Arch             string        `json:"arch"`
+	Distro           string        `json:"distro"`
+	SuiteResults     []SuiteResult `json:"suite_results"`
+	ReportType       string        `json:"report_type"`
+	// FixOutcomes indexes the per-check fix evidence so a report consumer can
+	// find every pending or completed remediation without walking all checks.
+	FixOutcomes      []FixOutcome `json:"fix_outcomes,omitempty"`
+	FixPending       int          `json:"fix_pending,omitempty"`
+	FixVerified      int          `json:"fix_verified,omitempty"`
+	FixFailed        int          `json:"fix_failed,omitempty"`
+	FailureLocations []string     `json:"failure_locations,omitempty"`
 }
 
 type SystemInfo struct {
